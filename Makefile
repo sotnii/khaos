@@ -4,7 +4,7 @@ BUILD_DIR := build
 
 .PHONY: all generate build clean run
 
-all: generate build run
+all: generate build
 
 generate:
 	go generate ./...

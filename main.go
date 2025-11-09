@@ -3,25 +3,45 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/sotnii/khaos/xdp"
+	"github.com/sotnii/khaos/packetdrop"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatalf("usage: %s <ifname>", os.Args[0])
+	if len(os.Args) < 3 {
+		log.Fatalf("usage: %s <iface> <port> <drop_pct>", os.Args[0])
 	}
 
 	ifname := os.Args[1]
 	iface, err := net.InterfaceByName(ifname)
 	if err != nil {
-		log.Fatalf("Getting interface %s: %s", ifname, err)
+		log.Fatalf("Cannot determine interface by name: %s", os.Args[1])
 	}
-	pd := xdp.NewPacketDropper(iface)
+
+	targetPort, err := strconv.Atoi(os.Args[2])
+	if err != nil {
+		log.Fatalf("Invalid port: %s", os.Args[2])
+	}
+
+	if targetPort < 0 || targetPort > 65535 {
+		log.Fatalf("Invalid port: %d", targetPort)
+	}
+
+	dropPct, err := strconv.Atoi(os.Args[3])
+	if err != nil {
+		log.Fatalf("Invalid drop_pct: %s", os.Args[3])
+	}
+
+	if dropPct < 1 || dropPct > 100 {
+		log.Fatalf("Invalid drop_pct: %d", dropPct)
+	}
+
+	pd := packetdrop.NewPacketDropper(iface, targetPort, dropPct)
 
 	err = pd.Attach()
 	if err != nil {
@@ -34,8 +54,6 @@ func main() {
 		}
 	}()
 
-	log.Printf("Dropping packets on %s", ifname)
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -44,7 +62,20 @@ func main() {
 		log.Fatalf("Tracing events: %s", err)
 	}
 
+	log.Printf("Dropping %d%% of incoming packets for port %d on %v", dropPct, targetPort, ifname)
+
+	droppedCnt := 0
+	passedCnt := 0
 	for event := range eventTrace {
 		fmt.Println(event)
+		switch event.Type {
+		case packetdrop.TypePass:
+			passedCnt++
+		case packetdrop.TypeDrop:
+			droppedCnt++
+		default:
+		}
 	}
+
+	fmt.Printf("\nTraced %d events, dropped %d, passed %d\n", droppedCnt+passedCnt, droppedCnt, passedCnt)
 }

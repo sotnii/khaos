@@ -1,14 +1,16 @@
-package xdp
+package packetdrop
 
 import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/perf"
 	"log"
 	"net"
+	"time"
 )
 
 type PerfEventType uint8
@@ -36,28 +38,47 @@ type PerfTraceEvent struct {
 	TimeSinceBoot  uint64
 	ProcessingTime uint32
 	Type           PerfEventType
+	SrcPort        uint16
 }
 
 func (e PerfTraceEvent) String() string {
-	return fmt.Sprintf("PerfTraceEvent{TimeSinceBoot:%d,Type:%v}", e.TimeSinceBoot, e.Type)
+	return fmt.Sprintf("PerfTrace: TimeSinceBoot:%d, Type:%v, Port: %d", e.TimeSinceBoot, e.Type, e.SrcPort)
 }
 
 type PacketDropper struct {
-	iface   *net.Interface
-	xdpLink link.Link
-	objs    *packetDropObjects
+	iface      *net.Interface
+	targetPort uint16
+	dropPct    uint32
+	xdpLink    link.Link
+	objs       *packetDropObjects
 }
 
-func NewPacketDropper(iface *net.Interface) PacketDropper {
+func NewPacketDropper(iface *net.Interface, targetPort int, dropPct int) PacketDropper {
 	return PacketDropper{
-		iface: iface,
+		iface:      iface,
+		targetPort: uint16(targetPort),
+		dropPct:    uint32(dropPct),
 	}
 }
 
 func (pd *PacketDropper) Attach() error {
-	// Load the compiled eBPF ELF and load it into the kernel.
+	// Load the object file from disk using a bpf2go-generated scaffolding.
+	spec, err := loadPacketDrop()
+	if err != nil {
+		return err
+	}
+
+	if err := spec.Variables["target_port"].Set(pd.targetPort); err != nil {
+		return err
+	}
+	if err := spec.Variables["drop_pct"].Set(pd.dropPct); err != nil {
+		return err
+	}
+
+	// Note: modifying spec.Variables after this point is ineffectual!
+	// Modifying *Spec resources does not affect loaded/running BPF programs.
 	var objs packetDropObjects
-	if err := loadPacketDropObjects(&objs, nil); err != nil {
+	if err := spec.LoadAndAssign(&objs, nil); err != nil {
 		return err
 	}
 	pd.objs = &objs
@@ -90,12 +111,32 @@ func (pd *PacketDropper) Close() error {
 
 func (pd *PacketDropper) TraceEvents(ctx context.Context) (chan PerfTraceEvent, error) {
 	eventsCh := make(chan PerfTraceEvent)
+	recordCh := make(chan perf.Record)
 	reader, err := perf.NewReader(pd.objs.OutputMap, 4096)
 	if err != nil {
 		return nil, err
 	}
 
+	go func() {
+		for ctx.Err() == nil {
+			record, err := reader.Read()
+			if err != nil && !errors.Is(err, perf.ErrClosed) {
+				log.Printf("reading from perf event reader: %v", err)
+				continue
+			}
+
+			// Skip lost events
+			if record.LostSamples != 0 {
+				fmt.Printf("Lost %d samples\n", record.LostSamples)
+				continue
+			}
+			recordCh <- record
+		}
+	}()
+
 	go func(objs *packetDropObjects) {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
 		defer func() {
 			_ = reader.Close()
 			close(eventsCh)
@@ -105,22 +146,13 @@ func (pd *PacketDropper) TraceEvents(ctx context.Context) (chan PerfTraceEvent, 
 			select {
 			case <-ctx.Done():
 				return
-			default:
-				record, err := reader.Read()
-				if err != nil {
-					log.Printf("reading from perf event reader: %v", err)
-					continue
-				}
-
-				// Skip lost events
-				if record.LostSamples != 0 {
-					fmt.Printf("Lost %d samples\n", record.LostSamples)
-					continue
-				}
+			case record := <-recordCh:
 				var event PerfTraceEvent
-				if err = binary.Read(bytes.NewBuffer(record.RawSample), binary.LittleEndian, &event); err == nil {
+				if err = binary.Read(bytes.NewBuffer(record.RawSample), binary.BigEndian, &event); err == nil {
 					eventsCh <- event
 				}
+			case <-ticker.C:
+				continue
 			}
 		}
 	}(pd.objs)
