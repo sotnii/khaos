@@ -3,13 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/sotnii/khaos/packetdrop"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+
+	"github.com/sotnii/khaos/packetdrop"
 )
 
 func main() {

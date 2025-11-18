@@ -1,18 +1,11 @@
-#include <linux/if_ether.h>   // for struct ethhdr, ETH_P_IP, etc.
-#include <linux/ip.h>         // for struct iphdr
-#include <linux/udp.h>        // for struct udphdr
-#include <linux/tcp.h>        // for struct tcphdr
-#include <bpf/bpf_helpers.h>  // for SEC(), bpf_htons(), etc.
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
-#include <linux/bpf.h>
 
 // I hate C. Period.
-#ifndef IPPROTO_TCP
+#define ETH_P_IP    0x0800
 #define IPPROTO_TCP 6
-#endif
-#ifndef IPPROTO_UDP
 #define IPPROTO_UDP 17
-#endif
 
 #define TYPE_ENTER 1
 #define TYPE_DROP 2
