@@ -28,13 +28,19 @@ make
 ## Usage
 ```shell
 # You'll need root privileges in order to load BPF programs
-sudo make run <ifname> <port> <drop_percent>
+sudo make run <dropped packets pct> --interface <ifname> --port <port>
 
 # or without make
-sudo ./build/khaos <ifname> <port> <drop_percent>
+sudo ./build/khaos <dropped packets pct> --interface <ifname> --port <port>
 ```
 
->[!NOTE] About `<port>`
-> Khaos uses an xdp ebpf program to drop packets. XDP only processes ingress packets, so the `<port>` argument basically
-> filters anything that comes from the specified port.
-> For example, if you provide `80`, it will result in filtering any HTTP traffic on the interface.
+### Available Flags
+- `--interface, -i`: Interface to attach the program to directly
+- `--docker, -d`: Use virtual interface for a specified docker container (the container should be running)
+- `--ip`: Source IP address to block traffic from (where 0.0.0.0 means all destinations)
+- `--port, -p`: Port number to block traffic from (default 0 - means all ports)
+
+>[!NOTE] About the `<dropped packets pct>` argument
+> Khaos uses an XDP eBPF program to drop packets. XDP only processes ingress packets, so the percentage value
+> specifies what percentage of incoming packets to drop based on the filtering criteria.
+> For example, providing `50` will result in dropping approximately 50% of matching traffic on the interface.
