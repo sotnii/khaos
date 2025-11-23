@@ -28,15 +28,13 @@ make
 ## Usage
 ```shell
 # You'll need root privileges in order to load BPF programs
-sudo make run <dropped packets pct> --interface <ifname> --port <port>
+sudo make run <docker container | interface name> <dropped packets pct> --port <port>
 
 # or without make
-sudo ./build/khaos <dropped packets pct> --interface <ifname> --port <port>
+sudo ./build/khaos <docker container | interface name> <dropped packets pct> --port <port>
 ```
 
 ### Available Flags
-- `--interface, -i`: Interface to attach the program to directly
-- `--docker, -d`: Use virtual interface for a specified docker container (the container should be running)
 - `--ip`: Source IP address to block traffic from (where 0.0.0.0 means all destinations)
 - `--port, -p`: Port number to block traffic from (default 0 - means all ports)
 

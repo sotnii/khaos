@@ -20,13 +20,13 @@ import (
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:     "khaos <dropped packets pct>",
+	Use:     "khaos <docker container | interface name> <dropped packets pct>",
 	Short:   "Run khaos (alias for khaos block)",
 	Aliases: []string{"block"},
 	Long: `Khaos is a WIP chaos monkey framework taking leverage of eBPF to control network traffic of applications
 
 	Note: Since XDP handles ingress-only traffic, --ip & --port are compared against values only in incoming traffic.`,
-	Args: cobra.MatchAll(cobra.ExactArgs(1)),
+	Args: cobra.MatchAll(cobra.ExactArgs(2)),
 	Run:  runRoot,
 }
 
@@ -48,39 +48,39 @@ func init() {
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
-	rootCmd.Flags().StringP("interface", "i", "", "interface to attach the program to directly")
-	rootCmd.Flags().StringP("docker", "d", "", "use virtual interface for a specified docker container (the container should be running)")
+	// Note: --interface and --docker flags have been removed in favor of positional arguments
 	rootCmd.Flags().IP("ip", net.IPv4zero, "src ip address to block traffic from where 0.0.0.0 means all destinations")
 	rootCmd.Flags().IntP("port", "p", 0, "port number to block traffic from (default 0 - means all ports)")
 }
 
 func runRoot(cmd *cobra.Command, args []string) {
-	dropPct, err := strconv.Atoi(args[0])
+	name := args[0]  // First argument: docker container name or interface name
+	dropPctStr := args[1]  // Second argument: drop percentage
+
+	dropPct, err := strconv.Atoi(dropPctStr)
 	if err != nil {
 		log.Fatal("drop percentage must be an integer")
 	}
 
 	var iface *net.Interface = nil
-	ifaceName, _ := cmd.Flags().GetString("interface")
-	if ifaceName != "" {
-		iface, err = net.InterfaceByName(ifaceName)
-		if err != nil {
-			log.Fatal(err)
-		}
-	}
+	var ifaceName string
 
-	dockerContainer, _ := cmd.Flags().GetString("docker")
-	if ifaceName == "" && dockerContainer != "" {
-		veth, err := getDockerContainerVeth(dockerContainer)
-		if err != nil {
-			log.Fatal("failed to get docker container veth: " + err.Error())
-		}
+	// First, try to find as Docker container
+	veth, dockerErr := getDockerContainerVeth(name)
+	if dockerErr == nil {
+		// Found as Docker container
 		ifaceName = veth
-		iface, _ = net.InterfaceByName(veth)
-	}
-
-	if iface == nil {
-		log.Fatalf("expected --docker or --interface to be passed")
+		iface, err = net.InterfaceByName(veth)
+		if err != nil {
+			log.Fatalf("failed to get interface for docker container %s: %s", name, err.Error())
+		}
+	} else {
+		// Not a Docker container, try as interface name
+		iface, err = net.InterfaceByName(name)
+		if err != nil {
+			log.Fatalf("could not find docker container or interface with name %s", name)
+		}
+		ifaceName = name
 	}
 
 	ip, _ := cmd.Flags().GetIP("ip")
