@@ -4,14 +4,15 @@ A teeny-tiny program that allows you to drop network packets
 
 ## Requirements
 - Linux kernel version 6.10 or later
-  - Calling `bpf_get_current_pid_tgid` in XDP programs was introduced, which makes it possible to drops packets on specified PIDs
 - LLVM 11 or later (`clang` and `llvm-strip`)
 - `libbpf` headers
-- Linux kernel headers
+- `bpftool` installed (for building)
 - Go compiler version supported by `ebpf-go`'s Go module
 - [bpf2go](https://pkg.go.dev/github.com/cilium/ebpf/cmd/bpf2go) (for bpf code gen)
 
 ## Building
+Before building, 
+
 To build and run, you can use following commands
 ```shell
 # codegen/build
