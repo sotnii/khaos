@@ -67,8 +67,9 @@ type packetDropMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type packetDropVariableSpecs struct {
-	DropPct    *ebpf.VariableSpec `ebpf:"drop_pct"`
-	TargetPort *ebpf.VariableSpec `ebpf:"target_port"`
+	DropPct       *ebpf.VariableSpec `ebpf:"drop_pct"`
+	TargetSrcIp   *ebpf.VariableSpec `ebpf:"target_src_ip"`
+	TargetSrcPort *ebpf.VariableSpec `ebpf:"target_src_port"`
 }
 
 // packetDropObjects contains all objects after they have been loaded into the kernel.
@@ -104,8 +105,9 @@ func (m *packetDropMaps) Close() error {
 //
 // It can be passed to loadPacketDropObjects or ebpf.CollectionSpec.LoadAndAssign.
 type packetDropVariables struct {
-	DropPct    *ebpf.Variable `ebpf:"drop_pct"`
-	TargetPort *ebpf.Variable `ebpf:"target_port"`
+	DropPct       *ebpf.Variable `ebpf:"drop_pct"`
+	TargetSrcIp   *ebpf.Variable `ebpf:"target_src_ip"`
+	TargetSrcPort *ebpf.Variable `ebpf:"target_src_port"`
 }
 
 // packetDropPrograms contains all programs after they have been loaded into the kernel.

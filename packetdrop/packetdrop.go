@@ -6,11 +6,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/perf"
 	"log"
 	"net"
 	"time"
+
+	"github.com/cilium/ebpf/link"
+	"github.com/cilium/ebpf/perf"
 )
 
 type PerfEventType uint8
@@ -35,30 +36,40 @@ func (t PerfEventType) String() string {
 }
 
 type PerfTraceEvent struct {
-	TimeSinceBoot  uint64
-	ProcessingTime uint32
-	Type           PerfEventType
-	SrcPort        uint16
+	Type  PerfEventType
+	SrcIP uint32
+	// TODO: Src port reads as garbage
+	SrcPort uint16
 }
 
 func (e PerfTraceEvent) String() string {
-	return fmt.Sprintf("PerfTrace: TimeSinceBoot:%d, Type:%v, Port: %d", e.TimeSinceBoot, e.Type, e.SrcPort)
+	ipBytes := make([]byte, 4)
+	binary.NativeEndian.PutUint32(ipBytes, e.SrcIP)
+	ipAddress := net.IP(ipBytes)
+
+	return fmt.Sprintf("[%s]: from %s:%d", e.Type, ipAddress, e.SrcPort)
 }
 
 type PacketDropper struct {
 	iface      *net.Interface
+	targetIP   net.IP
 	targetPort uint16
 	dropPct    uint32
 	xdpLink    link.Link
 	objs       *packetDropObjects
 }
 
-func NewPacketDropper(iface *net.Interface, targetPort int, dropPct int) PacketDropper {
+func NewPacketDropper(iface *net.Interface, ip net.IP, targetPort int, dropPct int) (PacketDropper, error) {
+	if ip == nil {
+		return PacketDropper{}, errors.New("must provide IP addr")
+	}
+
 	return PacketDropper{
 		iface:      iface,
+		targetIP:   ip,
 		targetPort: uint16(targetPort),
 		dropPct:    uint32(dropPct),
-	}
+	}, nil
 }
 
 func (pd *PacketDropper) Attach() error {
@@ -68,7 +79,15 @@ func (pd *PacketDropper) Attach() error {
 		return err
 	}
 
-	if err := spec.Variables["target_port"].Set(pd.targetPort); err != nil {
+	ipVal := net.IPv4zero
+	if pd.targetIP != nil {
+		ipVal = pd.targetIP
+	}
+	if err := spec.Variables["target_src_ip"].Set(ipVal.To4()); err != nil {
+		return err
+	}
+
+	if err := spec.Variables["target_src_port"].Set(pd.targetPort); err != nil {
 		return err
 	}
 	if err := spec.Variables["drop_pct"].Set(pd.dropPct); err != nil {
@@ -148,7 +167,7 @@ func (pd *PacketDropper) TraceEvents(ctx context.Context) (chan PerfTraceEvent, 
 				return
 			case record := <-recordCh:
 				var event PerfTraceEvent
-				if err = binary.Read(bytes.NewBuffer(record.RawSample), binary.BigEndian, &event); err == nil {
+				if err = binary.Read(bytes.NewBuffer(record.RawSample), binary.NativeEndian, &event); err == nil {
 					eventsCh <- event
 				}
 			case <-ticker.C:
