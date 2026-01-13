@@ -1,4 +1,5 @@
 mod config;
+mod validation;
 
 use std::env;
 use std::process;
@@ -15,6 +16,12 @@ fn main() {
 
     match config::Config::load_from_file(config_path) {
         Ok(config) => {
+            // Validate the loaded configuration
+            if let Err(e) = config.validate(config_path) {
+                eprintln!("Error validating config: {}", e);
+                process::exit(1);
+            }
+
             println!("Configuration loaded successfully!");
             println!("Name: {}", config.name);
             println!("Description: {}", config.description);

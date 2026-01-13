@@ -4,6 +4,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_yaml;
 use std::{collections::HashMap, time::Duration};
 
+use crate::validation::{Validate, ValidationContext};
+
 /// Defines configuration for test cases.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -29,8 +31,7 @@ pub struct NodeConfig {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct IdentifyBy {
     pub docker: Option<String>,
-    pub ip: Option<String>,
-    pub hostname: Option<String>,
+    pub host: Option<String>,
 }
 
 /// Probes are reusable actions that are used to verify the state of the system.
@@ -282,13 +283,7 @@ pub struct ProbeVerifyOptions {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ScriptVerifyAction {
-    pub options: ScriptVerifyOptions,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ScriptVerifyOptions {
-    pub file: String,
-    pub function: String,
+    pub options: ScriptOptions,
 }
 
 impl Config {
@@ -297,6 +292,14 @@ impl Config {
         let content = std::fs::read_to_string(path)?;
         let config: Config = serde_yaml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Validate the configuration
+    pub fn validate(&self, config_file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let validation_context = ValidationContext::new(self, config_file_path);
+        Validate::validate(self, &validation_context)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+        Ok(())
     }
 }
 
@@ -512,5 +515,180 @@ verify:
 
         let result: Result<Config, _> = serde_yaml::from_str(yaml_invalid);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validation_valid_config() {
+        let yaml_content = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+  node2:
+    group: group1
+    identify_by:
+      docker: test_container2
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["node1", "node2"]
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+method:
+  test_method:
+    kind: partition
+    duration: 1m
+    options:
+      partitions:
+        - ["node1"]
+        - ["node2"]
+      loss: 100
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: test_probe
+"#;
+
+        // This should parse and validate successfully
+        let result = serde_yaml::from_str::<Config>(yaml_content);
+        assert!(result.is_ok());
+
+        let config = result.unwrap();
+        // Try to validate explicitly
+        let validation_result = config.validate(".");
+        assert!(validation_result.is_ok());
+    }
+
+    #[test]
+    fn test_validation_invalid_node_reference() {
+        let yaml_content = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["nonexistent_node"]  # This node doesn't exist
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+method:
+  test_method:
+    kind: script
+    options:
+      file: "test_script.sh"
+      function: "test_func"
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: test_probe
+"#;
+
+        let config: Config = serde_yaml::from_str(yaml_content).unwrap();
+        let result = config.validate(".");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "probes.test_probe.options.nodes[0]: Node 'nonexistent_node' does not exist in the nodes section"
+        )
+    }
+
+    #[test]
+    fn test_validation_invalid_probe_reference() {
+        let yaml_content = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["node1"]
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+method:
+  test_method:
+    kind: script
+    options:
+      file: "test_script.sh"
+      function: "test_func"
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: nonexistent_probe  # This probe doesn't exist
+"#;
+
+        let config: Config = serde_yaml::from_str(yaml_content).unwrap();
+        let result = config.validate(".");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "method.test_method: Script file 'test_script.sh' does not exist (resolved relative to config file as 'test_script.sh')"
+        );
+    }
+
+    #[test]
+    fn test_validation_invalid_partition_loss() {
+        let yaml_content = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+  node2:
+    group: group1
+    identify_by:
+      docker: test_container2
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["node1"]
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+method:
+  test_method:
+    kind: partition
+    duration: 1m
+    options:
+      partitions:
+        - ["node1"]
+        - ["node2"]
+      loss: 150  # Invalid loss value (should be 1-100)
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: test_probe
+"#;
+
+        let config: Config = serde_yaml::from_str(yaml_content).unwrap();
+        let result = config.validate(".");
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "method.test_method.options.loss: Partition loss must be between 1 and 100"
+        )
     }
 }
