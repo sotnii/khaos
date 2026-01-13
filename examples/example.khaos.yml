@@ -1,0 +1,110 @@
+name: patroni_network_partition
+description: "Patroni 4.0.5: partition from etcd, failover to new leader, heal —> no stale leader"
+# How much time to wait after methods are finished running before starting verification process
+verify_timeout: 1m
+
+# Network configuration for the test
+nodes:
+  patroni_1:
+    group: minority
+    identify_by:
+      docker: patroni_1
+  patroni_2:
+    group: majority
+    identify_by:
+      docker: patroni_2
+  patroni_3:
+    group: majority
+    identify_by:
+      docker: patroni_3
+
+  etcd_1:
+    group: minority
+    identify_by:
+      docker: etcd_1
+  etcd_2:
+    group: majority
+    identify_by:
+      docker: etcd_2
+  etcd_3:
+    group: majority
+    identify_by:
+      docker: etcd_3
+
+# Probes are reusable one_off checks used to verify that the system is in desired state
+# Can be reused in: setup, steady_state and verify
+probes:
+  # Generic health: at least one leader must be available
+  has_leader:
+    kind: http
+    options:
+      nodes: [patroni_1, patroni_2, patroni_3]
+      timeout: 2s
+      request: GET http://{{node}}:8008/cluster
+      at_least: 1 # number of successful checks in order to pass
+      check:
+        lua: |
+          function check(response)
+            local leader = response.json.members:find(function(m) return m.role == "leader" end)
+            return leader ~= nil
+          end
+        # or
+        # file: scripts/patroni_network_partition.lua
+
+setup:
+  wait_for_healthy_cluster:
+    kind: wait_probes
+    options:
+      probes: [has_leader]
+      timeout: 2m
+      interval: 10s
+
+method:
+  split_cluster:
+    # partition allows to split the network configuration is different availability zones
+    kind: partition
+    duration: 4m
+    options:
+      # splitting cluster into two groups
+      partitions:
+        - [minority] # you can specify group names or node names in one partition
+        - [majority]
+      loss: 100
+
+  simulate_load:
+    kind: script
+    after: 30s
+    duration: 3m
+    options:
+      file: scripts/patroni_network_partition.lua
+      # or "lua" for inline lua script
+      function: write_data
+      concurrency: 10
+
+# Runs while "method" sections are running to verify the cluster healthiness
+# Consists of probes to run at given intervals
+steady_state:
+  # Generic health: at least one leader must be available
+  has_leader:
+    probe: has_leader
+    interval: 10s
+
+# Verify runs after all methods finished
+# Note: order matters here
+verify:
+  has_leader:
+    kind: probe
+    options:
+      probe: has_leader
+
+  no_stale_leader:
+    kind: script
+    options:
+      file: scripts/patroni_network_partition.lua
+      function: check_stale_leader
+
+  no_split_brain:
+    kind: script
+    options:
+      file: scripts/patroni_network_partition.lua
+      function: check_split_brain
