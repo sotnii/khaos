@@ -41,7 +41,7 @@ probes:
       nodes: [patroni_1, patroni_2, patroni_3]
       timeout: 2s
       request: GET http://{{node}}:8008/cluster
-      at_least: 1 # number of successful checks in order to pass
+      at_least: all # number of successful checks in order to pass, accepts "all" or a positive number
       check:
         lua: |
           function check(response)

@@ -1,6 +1,7 @@
 use duration_str::{deserialize_duration, deserialize_option_duration};
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_yaml;
 use std::{collections::HashMap, time::Duration};
 
 /// Defines configuration for test cases.
@@ -77,11 +78,53 @@ fn at_least_default() -> AtLeastOption {
     AtLeastOption::All
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+fn deserialize_at_least_option<'de, D>(deserializer: D) -> Result<AtLeastOption, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let value = serde_yaml::Value::deserialize(deserializer)?;
+
+    match value {
+        serde_yaml::Value::String(s) => {
+            if s.to_lowercase() == "all" {
+                Ok(AtLeastOption::All)
+            } else {
+                match s.parse::<usize>() {
+                    Ok(num) => Ok(AtLeastOption::Some(num)),
+                    Err(_) => Err(D::Error::custom(format!(
+                        "Expected 'all' or a positive integer, got: {}",
+                        s
+                    ))),
+                }
+            }
+        }
+        serde_yaml::Value::Number(n) => {
+            if let Some(num) = n.as_u64() {
+                Ok(AtLeastOption::Some(num as usize))
+            } else {
+                Err(D::Error::custom("Expected a positive integer"))
+            }
+        }
+        _ => Err(D::Error::custom("Expected 'all' or a positive integer")),
+    }
+}
+
+#[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum AtLeastOption {
     All,
     Some(usize),
+}
+
+impl<'de> Deserialize<'de> for AtLeastOption {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserialize_at_least_option(deserializer)
+    }
 }
 
 /// A generic script configuration used across actions
@@ -307,5 +350,167 @@ verify:
         // Check that verify actions maintain order
         let verify_keys: Vec<&String> = config.verify.keys().collect();
         assert_eq!(verify_keys, vec!["first_check", "second_check"]);
+    }
+
+    #[test]
+    fn test_at_least_option_parsing() {
+        // Test "all" string
+        let yaml_all = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["node1"]
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+      at_least: "all"
+method:
+  test_method:
+    kind: script
+    options:
+      file: "test_script.sh"
+      function: "test_func"
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: test_probe
+"#;
+
+        let config: Config = serde_yaml::from_str(yaml_all).unwrap();
+        match &config.probes.get("test_probe").unwrap() {
+            Probe::Http(http_probe) => {
+                assert!(matches!(http_probe.options.at_least, AtLeastOption::All));
+            }
+            _ => panic!("Expected Http probe"),
+        }
+
+        // Test numeric string
+        let yaml_number = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["node1"]
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+      at_least: "2"
+method:
+  test_method:
+    kind: script
+    options:
+      file: "test_script.sh"
+      function: "test_func"
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: test_probe
+"#;
+
+        let config: Config = serde_yaml::from_str(yaml_number).unwrap();
+        match &config.probes.get("test_probe").unwrap() {
+            Probe::Http(http_probe) => {
+                if let AtLeastOption::Some(value) = http_probe.options.at_least {
+                    assert_eq!(value, 2);
+                } else {
+                    panic!("Expected Some(2)");
+                }
+            }
+            _ => panic!("Expected Http probe"),
+        }
+
+        // Test integer value
+        let yaml_integer = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["node1"]
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+      at_least: 3
+method:
+  test_method:
+    kind: script
+    options:
+      file: "test_script.sh"
+      function: "test_func"
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: test_probe
+"#;
+
+        let config: Config = serde_yaml::from_str(yaml_integer).unwrap();
+        match &config.probes.get("test_probe").unwrap() {
+            Probe::Http(http_probe) => {
+                if let AtLeastOption::Some(value) = http_probe.options.at_least {
+                    assert_eq!(value, 3);
+                } else {
+                    panic!("Expected Some(3)");
+                }
+            }
+            _ => panic!("Expected Http probe"),
+        }
+
+        // Test invalid string should fail
+        let yaml_invalid = r#"
+name: test_config
+description: "Test configuration"
+verify_timeout: 1m
+nodes:
+  node1:
+    group: group1
+    identify_by:
+      docker: test_container
+probes:
+  test_probe:
+    kind: http
+    options:
+      nodes: ["node1"]
+      timeout: 5s
+      request: "GET http://{{node}}:8080/health"
+      at_least: "invalid"
+method:
+  test_method:
+    kind: script
+    options:
+      file: "test_script.sh"
+      function: "test_func"
+verify:
+  first_check:
+    kind: probe
+    options:
+      probe: test_probe
+"#;
+
+        let result: Result<Config, _> = serde_yaml::from_str(yaml_invalid);
+        assert!(result.is_err());
     }
 }

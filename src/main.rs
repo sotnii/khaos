@@ -31,7 +31,7 @@ fn main() {
 
             println!("\nProbes:");
             for (name, probe) in &config.probes {
-                println!("  {}: {:?}", name, probe);
+                println!("{}: {:?}", name, probe);
             }
 
             if let Some(setup) = &config.setup {
