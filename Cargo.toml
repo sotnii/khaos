@@ -1,0 +1,12 @@
+[package]
+name = "khaos"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror = "2.0.18"
+log = "0.4.29"
+anyhow = "1.0.102"
+
+[dev-dependencies]
+simple_logger = "5.2.0"
