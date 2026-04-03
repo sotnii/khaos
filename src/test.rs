@@ -1,13 +1,20 @@
-use crate::net::NamespaceManager;
-use crate::spec::ClusterSpec;
+use crate::spec::{ClusterSpec, NodeId, NodeSpec};
 use anyhow::Result;
-use log::info;
+use log::{debug, info};
 use thiserror::Error;
+use crate::net::manager::ClusterNetworkManager;
+
+
+pub struct Node {
+    node_id: NodeId,
+    spec: NodeSpec,
+}
 
 pub struct Test {
     name: &'static str,
     cluster_spec: ClusterSpec,
-    namespace_manager: NamespaceManager,
+    network: ClusterNetworkManager,
+    nodes: Vec<Node>,
 }
 
 #[derive(Debug, Error)]
@@ -17,15 +24,16 @@ pub enum TestError {
 }
 
 pub struct TestContext {
-    pub spec: ClusterSpec,
 }
 
+// TODO: Using anyhow here is kind of weak for troubleshooting
 impl Test {
     pub fn new(name: &'static str, cluster_spec: ClusterSpec) -> Test {
         Test {
             name,
             cluster_spec,
-            namespace_manager: NamespaceManager::new(),
+            network: ClusterNetworkManager::new(),
+            nodes: Vec::new(),
         }
     }
 
@@ -34,6 +42,7 @@ impl Test {
         F: Fn(TestContext) -> (),
     {
         info!("Running {}", self.name);
+        debug!("{:#?}", self.cluster_spec);
 
         // TODO: Set everything up
         self.setup()?;
@@ -43,7 +52,6 @@ impl Test {
         // TODO: Give execution to the test function
         // TODO: After everything is tested (regardless of the outcome) - clean everything up
         tester(TestContext {
-            spec: self.cluster_spec.clone(),
         });
 
         self.teardown()?;
@@ -54,14 +62,24 @@ impl Test {
     fn setup(&mut self) -> Result<()> {
         info!("running cluster setup");
 
-        let node_names: Vec<_> = self.cluster_spec.nodes.iter().map(|x| x.name()).collect();
-        for name in node_names {
-            self.namespace_manager.create(format!("kh-{}", name))?;
+        self.network.setup_bridge()?;
+
+        for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
+            self.network.setup_node_namespace(&node_id)?;
+            self.nodes.push(Node{
+                node_id: node_id.clone(),
+                spec: node_spec.clone(),
+            });
         }
+
+        debug!("setting up node network");
+        self.network.setup_node_network()?;
+
+        debug!("{:#?}", self.network.get_node_namespace(&self.nodes.first().unwrap().node_id).unwrap());
 
         // TODO:
         //  +1. Setup namespaces
-        //  2. Setup full mesh network between nodes
+        //  +2. Setup full mesh network between nodes
         //  3. Spawn containers with containerd
         //  4. Wait for availability for containers
         //  5. HOORAY!
@@ -77,7 +95,7 @@ impl Test {
         //  2. Tear down mesh network (disable, delete veth)
         //  +3. Teardown namespaces
 
-        self.namespace_manager.teardown()?;
+        self.network.teardown_all()?;
 
         Ok(())
     }

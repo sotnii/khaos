@@ -1,24 +1,57 @@
-pub mod common;
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 
-use std::cell::RefCell;
-use std::rc::Rc;
+pub mod common;
 
 #[derive(Debug, Clone)]
 pub struct ClusterSpec {
-    pub name: &'static str,
-    pub nodes: Vec<NodeSpec>,
-    pub az: Vec<AZSpec>,
+    pub name: String,
+    pub nodes: HashMap<NodeId, NodeSpec>,
+    pub az: HashMap<AzId, AZSpec>,
 }
 
-#[derive(Debug)]
-struct NodeSpecData {
-    name: &'static str,
-    container_specs: Vec<ContainerSpec>,
+// TODO: Check for name conflicts for nodes/az
+impl ClusterSpec {
+    pub fn new(name: impl Into<String>) -> ClusterSpec {
+        ClusterSpec {
+            name: name.into(),
+            nodes: HashMap::new(),
+            az: HashMap::new(),
+        }
+    }
+
+    pub fn add_node(&mut self, name: impl Into<String>, spec: NodeSpec) -> NodeId {
+        let key = NodeId(name.into());
+        if self.nodes.contains_key(&key) {
+            panic!("Node {key:?} already exists");
+        }
+        self.nodes.insert(key.clone(), spec);
+        key
+    }
+
+    pub fn add_az(&mut self, name: impl Into<String>, az: AZSpec) -> AzId {
+        let key = AzId(name.into());
+        if self.az.contains_key(&key) {
+            panic!("AZ {key:?} already exists");
+        }
+        self.az.insert(key.clone(), az);
+        key
+    }
 }
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct NodeId(pub String);
+
+impl Display for NodeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 
 #[derive(Clone, Debug)]
 pub struct NodeSpec {
-    inner: Rc<RefCell<NodeSpecData>>,
+    container_specs: Vec<ContainerSpec>,
 }
 
 #[derive(Clone, Debug)]
@@ -26,67 +59,37 @@ pub struct ContainerSpec {
     pub image: &'static str,
 }
 
+impl NodeSpec {
+    pub fn new() -> NodeSpec {
+        NodeSpec {
+                container_specs: vec![],
+        }
+    }
+
+    pub fn runs(self, container_spec: &ContainerSpec) -> NodeSpec {
+        let mut v = self.clone();
+        v.container_specs.push(container_spec.clone());
+        v
+    }
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct AzId(pub String);
+
 #[derive(Debug, Clone)]
 pub struct AZSpec {
-    pub name: &'static str,
-    pub nodes: Vec<NodeSpec>,
-}
-
-impl ClusterSpec {
-    pub fn new(name: &'static str) -> ClusterSpec {
-        ClusterSpec {
-            name,
-            nodes: vec![],
-            az: vec![],
-        }
-    }
-
-    pub fn node(&mut self, name: &'static str) -> NodeSpec {
-        let node = NodeSpec::new(name);
-        self.nodes.push(node.clone());
-        node
-    }
-
-    pub fn get_node(&self, name: &'static str) -> Option<&NodeSpec> {
-        self.nodes.iter().find(|x| x.name() == name)
-    }
-
-    pub fn az(&mut self, name: &'static str) -> &mut AZSpec {
-        self.az.push(AZSpec {
-            name,
-            nodes: vec![],
-        });
-        self.az.last_mut().unwrap()
-    }
-}
-
-impl NodeSpec {
-    fn new(name: &'static str) -> NodeSpec {
-        NodeSpec {
-            inner: Rc::new(RefCell::new(NodeSpecData {
-                name,
-                container_specs: vec![],
-            })),
-        }
-    }
-
-    pub fn with(self, container_spec: ContainerSpec) -> NodeSpec {
-        self.inner.borrow_mut().container_specs.push(container_spec);
-        self
-    }
-
-    pub fn name(&self) -> &'static str {
-        self.inner.borrow().name
-    }
-
-    pub fn container_specs(&self) -> Vec<ContainerSpec> {
-        self.inner.borrow().container_specs.clone()
-    }
+    pub nodes: Vec<NodeId>,
 }
 
 impl AZSpec {
-    pub fn with(&mut self, node: NodeSpec) -> &mut AZSpec {
-        self.nodes.push(node);
-        self
+    pub fn new() -> AZSpec {
+        AZSpec {
+            nodes: vec![],
+        }
+    }
+    pub fn contains(self, node: &NodeId) -> AZSpec {
+        let mut v = self.clone();
+        v.nodes.push(node.clone());
+        v
     }
 }
