@@ -10,7 +10,6 @@ pub struct ClusterSpec {
     pub az: HashMap<AzId, AZSpec>,
 }
 
-// TODO: Check for name conflicts for nodes/az
 impl ClusterSpec {
     pub fn new(name: impl Into<String>) -> ClusterSpec {
         ClusterSpec {
@@ -48,7 +47,6 @@ impl Display for NodeId {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub struct NodeSpec {
     container_specs: Vec<ContainerSpec>,
@@ -62,7 +60,7 @@ pub struct ContainerSpec {
 impl NodeSpec {
     pub fn new() -> NodeSpec {
         NodeSpec {
-                container_specs: vec![],
+            container_specs: vec![],
         }
     }
 
@@ -83,9 +81,7 @@ pub struct AZSpec {
 
 impl AZSpec {
     pub fn new() -> AZSpec {
-        AZSpec {
-            nodes: vec![],
-        }
+        AZSpec { nodes: vec![] }
     }
     pub fn contains(self, node: &NodeId) -> AZSpec {
         let mut v = self.clone();

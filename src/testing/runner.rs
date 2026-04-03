@@ -1,5 +1,6 @@
 use crate::net::manager::{ClusterNetworkError, ClusterNetworkManager};
 use crate::spec::{ClusterSpec, NodeId, NodeSpec};
+use crate::testing::ctx::TestContext;
 use std::panic;
 use thiserror::Error;
 use tokio::select;
@@ -56,12 +57,6 @@ pub struct Test {
     cancellation_token: CancellationToken,
 }
 
-#[derive(Debug)]
-pub struct TestContext {
-    cancellation_token: CancellationToken,
-}
-
-// TODO: Using anyhow here is kind of weak for troubleshooting
 impl Test {
     pub fn new(name: &'static str, cluster_spec: ClusterSpec) -> Test {
         Test {
@@ -90,9 +85,7 @@ impl Test {
             return Err(TestRunnerError::TestFailedOnSetup(setup_err));
         }
 
-        // TODO: Wait for liveliness probes as stuff
         // TODO: Setup test context
-        // TODO: Give execution to the test function
         let ctx = TestContext {
             cancellation_token: self.cancellation_token.clone(),
         };

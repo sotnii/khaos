@@ -218,7 +218,6 @@ impl ClusterNetworkManager {
                 )
             })?;
         }
-        // TODO: Delete/down bridge interface
         Ok(())
     }
 }

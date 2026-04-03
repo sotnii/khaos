@@ -1,6 +1,7 @@
 use crate::spec::ContainerSpec;
 
 pub fn postgres(image: &'static str) -> ContainerSpec {
+    // TODO: Setup a general postgres image with proper env, ports, etc.
     ContainerSpec {
         image: image.into(),
     }

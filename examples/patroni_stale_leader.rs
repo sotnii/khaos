@@ -1,7 +1,7 @@
 use anyhow::Result;
 use khaos::spec::common::postgres;
 use khaos::spec::{AZSpec, ClusterSpec, NodeSpec};
-use khaos::test::Test;
+use khaos::testing::Test;
 use tokio;
 use tracing::Level;
 
