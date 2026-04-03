@@ -1,7 +1,9 @@
 use std::io;
+use std::net::Ipv4Addr;
 use std::string::FromUtf8Error;
 use std::process::Command;
 use thiserror::Error;
+use crate::net::ip_alloc::LanSubnet;
 use crate::net::ip_cmd::IpCmdError::{CmdFailed, ErrOutput, InvalidOutput};
 
 #[derive(Debug, Error)]
@@ -58,6 +60,13 @@ impl IpCmd {
         Ok(())
     }
 
+    pub fn attach_addr_to_veth(ns: &String, veth: &String, addr: &Ipv4Addr, subnet: LanSubnet) -> Result<(), IpCmdError> {
+        let addr_with_subnet = format!("{}/{}", addr, subnet.cidr.prefix);
+        // ip netns exec ns1 ip addr add 10.0.0.1/24 dev veth-ns1
+        IpCmd::ns_exec(&ns, ["ip", "addr", "add", &addr_with_subnet, "dev", &veth])?;
+        Ok(())
+    }
+    
     pub fn add_veth_peer(veth: impl Into<String>, peer: impl Into<String>) -> Result<(), IpCmdError> {
         let veth = veth.into();
         let peer = peer.into();

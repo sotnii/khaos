@@ -1,6 +1,9 @@
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
+use std::str::FromStr;
 use thiserror::Error;
 use tracing::{debug, info_span};
+use crate::net::ip_alloc::{IpAllocError, LanIpAllocator};
 use crate::net::ip_cmd::{IpCmd, IpCmdError};
 use crate::spec::NodeId;
 
@@ -8,6 +11,8 @@ use crate::spec::NodeId;
 pub enum ClusterNetworkError {
     #[error("ip command failed: {0}")]
     IpCmdError(String, #[source] IpCmdError),
+    #[error("ip allocation failed: {0}")]
+    IpAllocationError(String, #[source] IpAllocError),
 }
 
 /// Cluster network net is responsible for setting up network namespaces for running nodes and managing topologies
@@ -16,7 +21,11 @@ pub struct ClusterNetworkManager {
     namespaces: HashMap<NodeId, NetworkNamespace>,
     bridge_name: String,
     bridge_up: bool,
+    ip_alloc: LanIpAllocator
 }
+
+const DEFAULT_IP_SUBNET: &'static str = "10.0.0.0";
+const DEFAULT_IP_RANGE: u8 = 24;
 
 impl ClusterNetworkManager {
     pub fn new() -> ClusterNetworkManager {
@@ -24,6 +33,10 @@ impl ClusterNetworkManager {
             namespaces: HashMap::new(),
             bridge_name: String::from("kh-bridge"),
             bridge_up: false,
+            ip_alloc: LanIpAllocator::new(
+                Ipv4Addr::from_str(DEFAULT_IP_SUBNET).unwrap(),
+                DEFAULT_IP_RANGE
+            ).unwrap()
         }
     }
 
@@ -125,11 +138,18 @@ impl ClusterNetworkManager {
                 format!("failed to set {} up", br_veth), e
             ))?;
 
+            let addr = self.ip_alloc.allocate_ip().map_err(|e| ClusterNetworkError::IpAllocationError(
+                format!("failed to allocate ip address for {}", veth), e
+            ))?;
+            IpCmd::attach_addr_to_veth(&nn.name, &veth, &addr, self.ip_alloc.subnet()).map_err(|e| ClusterNetworkError::IpCmdError(
+                format!("failed to attach new ip address for {}", veth), e
+            ))?;
+
             nn.iface = Some(veth);
             nn.bridge_pair = Some(br_veth);
-            debug!("namespace network is ready");
+            nn.allocated_lan_ip = Some(addr);
 
-            // TODO: allocate IP
+            debug!("namespace network is ready");
         }
         Ok(())
     }
@@ -155,4 +175,5 @@ pub struct NetworkNamespace {
     path: String,
     iface: Option<String>,
     bridge_pair: Option<String>,
+    allocated_lan_ip: Option<Ipv4Addr>,
 }
