@@ -5,8 +5,8 @@ edition = "2024"
 
 [dependencies]
 thiserror = "2.0.18"
-log = "0.4.29"
 anyhow = "1.0.102"
+tracing = "0.1.41"
 
 [dev-dependencies]
-simple_logger = "5.2.0"
+tracing-subscriber = { version = "0.3.20", features = ["fmt"] }

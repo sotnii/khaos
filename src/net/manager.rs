@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use log::debug;
 use thiserror::Error;
+use tracing::{debug, info_span};
 use crate::net::ip_cmd::{IpCmd, IpCmdError};
 use crate::spec::NodeId;
 
@@ -28,18 +28,19 @@ impl ClusterNetworkManager {
     }
 
     pub fn setup_bridge(&mut self) -> Result<(), ClusterNetworkError> {
+        let _span = info_span!("network.setup_bridge", bridge = %self.bridge_name).entered();
         let (exists, up) = IpCmd::get_if_status(&self.bridge_name).map_err(|e| ClusterNetworkError::IpCmdError(
             "failed to get bridge status".to_string(), e
         ))?;
 
         if !exists {
-            debug!("creating bridge veth {}", self.bridge_name);
+            debug!(bridge = %self.bridge_name, "creating bridge interface");
             IpCmd::add_bridge_veth(&self.bridge_name)
                 .map_err(|e| ClusterNetworkError::IpCmdError("failed to create bridge".to_string(), e))?;
         }
 
         if !up {
-            debug!("brining up bridge veth {}", self.bridge_name);
+            debug!(bridge = %self.bridge_name, "bringing bridge interface up");
             IpCmd::bring_veth_up(&self.bridge_name)
                 .map_err(|e| ClusterNetworkError::IpCmdError("failed to bring bridge up".to_string(), e))?;
         }
@@ -50,21 +51,22 @@ impl ClusterNetworkManager {
 
     pub fn setup_node_namespace(&mut self, node_id: &NodeId) -> Result<(), ClusterNetworkError> {
         let name = format!("kh-{}", node_id.0);
-        debug!("creating network namespace, ns={}, node_id={}", name, node_id);
+        let _span = info_span!("network.setup_node_namespace", ns = %name, node_id = %node_id).entered();
+        debug!("creating network namespace");
 
         IpCmd::add_ns(&name)
             .map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to add network namespace {}", name), e)
             )?;
 
-        debug!("namespace is up, ns={}, node_id={}", name, node_id);
+        debug!("network namespace created");
 
         // Bring loopback up
         IpCmd::bring_ns_veth_up(&name, "lo").map_err(|e| ClusterNetworkError::IpCmdError(
             format!("failed to bring loopback up in namespace {}", name), e
         ))?;
 
-        debug!("loopback interface is up, ns={}, node_id={}", name, node_id);
+        debug!(iface = "lo", "namespace interface is up");
 
         self.namespaces.insert(
             node_id.clone(),
@@ -82,13 +84,22 @@ impl ClusterNetworkManager {
     }
 
     pub fn setup_node_network(&mut self) -> Result<(), ClusterNetworkError> {
+        let _span = info_span!("network.setup_node_network", bridge = %self.bridge_name).entered();
         for (node_id, nn) in self.namespaces.iter_mut() {
             // TODO: Generate random IDs instead, because veth names are limited to 15chars and relying on user input here
             //  will cause errors
             let veth = format!("kh-veth-{}", node_id.0);
             let br_veth = format!("kh-br-{}", node_id.0);
+            let _span = info_span!(
+                "network.attach_namespace",
+                node_id = %node_id,
+                ns = %nn.name,
+                veth = %veth,
+                bridge_veth = %br_veth,
+                bridge = %self.bridge_name
+            ).entered();
 
-            debug!("setting up ns veth pair between {} and {}, ns={}, node_id={}", veth, br_veth, nn.name, node_id);
+            debug!("setting up namespace veth pair");
 
             // Create veth pair itself
             IpCmd::add_veth_peer(&veth, &br_veth).map_err(|e| ClusterNetworkError::IpCmdError(
@@ -116,6 +127,7 @@ impl ClusterNetworkManager {
 
             nn.iface = Some(veth);
             nn.bridge_pair = Some(br_veth);
+            debug!("namespace network is ready");
 
             // TODO: allocate IP
         }
@@ -123,9 +135,11 @@ impl ClusterNetworkManager {
     }
 
     pub fn teardown_all(&mut self) -> Result<(), ClusterNetworkError> {
+        let _span = info_span!("network.teardown_all", namespace_count = self.namespaces.len()).entered();
         debug!("tearing down all network namespaces");
         for (_, ns) in self.namespaces.drain() {
-            debug!("deleting network namespace, ns={}", &ns.name);
+            let _span = info_span!("network.delete_namespace", ns = %ns.name).entered();
+            debug!("deleting network namespace");
             IpCmd::del_ns(&ns.name).map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to delete namespace {}", &ns.name), e
             ))?;

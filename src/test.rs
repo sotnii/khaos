@@ -1,8 +1,8 @@
 use crate::spec::{ClusterSpec, NodeId, NodeSpec};
 use anyhow::Result;
-use log::{debug, info};
 use thiserror::Error;
 use crate::net::manager::ClusterNetworkManager;
+use tracing::{debug, info, info_span};
 
 
 pub struct Node {
@@ -41,8 +41,9 @@ impl Test {
     where
         F: Fn(TestContext) -> (),
     {
-        info!("Running {}", self.name);
-        debug!("{:#?}", self.cluster_spec);
+        let _span = info_span!("test.run", test = self.name).entered();
+        info!("running test");
+        debug!(cluster_spec = ?self.cluster_spec, "loaded cluster spec");
 
         // TODO: Set everything up
         self.setup()?;
@@ -60,11 +61,18 @@ impl Test {
     }
 
     fn setup(&mut self) -> Result<()> {
+        let _span = info_span!(
+            "test.setup",
+            test = self.name,
+            node_count = self.cluster_spec.nodes.len(),
+            az_count = self.cluster_spec.az.len()
+        ).entered();
         info!("running cluster setup");
 
         self.network.setup_bridge()?;
 
         for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
+            let _span = info_span!("test.setup_node", node_id = %node_id).entered();
             self.network.setup_node_namespace(&node_id)?;
             self.nodes.push(Node{
                 node_id: node_id.clone(),
@@ -72,10 +80,13 @@ impl Test {
             });
         }
 
-        debug!("setting up node network");
+        debug!(node_count = self.nodes.len(), "setting up node network");
         self.network.setup_node_network()?;
 
-        debug!("{:#?}", self.network.get_node_namespace(&self.nodes.first().unwrap().node_id).unwrap());
+        debug!(
+            namespace = ?self.network.get_node_namespace(&self.nodes.first().unwrap().node_id).unwrap(),
+            "first node namespace ready"
+        );
 
         // TODO:
         //  +1. Setup namespaces
@@ -88,6 +99,7 @@ impl Test {
     }
 
     fn teardown(&mut self) -> Result<()> {
+        let _span = info_span!("test.teardown", test = self.name, node_count = self.nodes.len()).entered();
         info!("running cluster teardown");
 
         // TODO:
