@@ -1,12 +1,12 @@
+use crate::net::ip_alloc::{IpAllocError, LanIpAllocator};
+use crate::net::ip_cmd::{IpCmd, IpCmdError};
+use crate::spec::NodeId;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::Path;
 use std::str::FromStr;
 use thiserror::Error;
 use tracing::{debug, info, info_span};
-use crate::net::ip_alloc::{IpAllocError, LanIpAllocator};
-use crate::net::ip_cmd::{IpCmd, IpCmdError};
-use crate::spec::NodeId;
 
 #[derive(Debug, Error)]
 pub enum ClusterNetworkError {
@@ -18,11 +18,12 @@ pub enum ClusterNetworkError {
 
 /// Cluster network net is responsible for setting up network namespaces for running nodes and managing topologies
 /// between nodes via veth pairs.
+#[derive(Debug)]
 pub struct ClusterNetworkManager {
     namespaces: HashMap<NodeId, NetworkNamespace>,
     bridge_name: String,
     bridge_up: bool,
-    ip_alloc: LanIpAllocator
+    ip_alloc: LanIpAllocator,
 }
 
 const DEFAULT_IP_SUBNET: &'static str = "10.0.0.0";
@@ -36,57 +37,63 @@ impl ClusterNetworkManager {
             bridge_up: false,
             ip_alloc: LanIpAllocator::new(
                 Ipv4Addr::from_str(DEFAULT_IP_SUBNET).unwrap(),
-                DEFAULT_IP_RANGE
-            ).unwrap()
+                DEFAULT_IP_RANGE,
+            )
+            .unwrap(),
         }
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn setup_bridge(&mut self) -> Result<(), ClusterNetworkError> {
-        let _span = info_span!("network.setup_bridge", bridge = %self.bridge_name).entered();
-        let (exists, up) = IpCmd::get_if_status(&self.bridge_name).map_err(|e| ClusterNetworkError::IpCmdError(
-            "failed to get bridge status".to_string(), e
-        ))?;
+        let (exists, up) = IpCmd::get_if_status(&self.bridge_name).map_err(|e| {
+            ClusterNetworkError::IpCmdError("failed to get bridge status".to_string(), e)
+        })?;
 
         if !exists {
             debug!(bridge = %self.bridge_name, "creating bridge interface");
-            IpCmd::add_bridge_veth(&self.bridge_name)
-                .map_err(|e| ClusterNetworkError::IpCmdError("failed to create bridge".to_string(), e))?;
+            IpCmd::add_bridge_veth(&self.bridge_name).map_err(|e| {
+                ClusterNetworkError::IpCmdError("failed to create bridge".to_string(), e)
+            })?;
         }
 
         if !up {
             debug!(bridge = %self.bridge_name, "bringing bridge interface up");
-            IpCmd::bring_iface_up(&self.bridge_name)
-                .map_err(|e| ClusterNetworkError::IpCmdError("failed to bring bridge up".to_string(), e))?;
+            IpCmd::bring_iface_up(&self.bridge_name).map_err(|e| {
+                ClusterNetworkError::IpCmdError("failed to bring bridge up".to_string(), e)
+            })?;
         }
 
         self.bridge_up = true;
         Ok(())
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn setup_node_namespace(&mut self, node_id: &NodeId) -> Result<(), ClusterNetworkError> {
         let name = format!("kh-{}", node_id.0);
         let path = format!("/run/netns/{}", name);
-        let _span = info_span!("network.setup_node_namespace", ns = %name, node_id = %node_id).entered();
 
         if Path::new(&path).exists() {
             info!("namespace already exists, tearing it down before recreating");
-            IpCmd::del_ns(&name).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to delete existing network namespace {}", name), e)
-            )?;
+            IpCmd::del_ns(&name).map_err(|e| {
+                ClusterNetworkError::IpCmdError(
+                    format!("failed to delete existing network namespace {}", name),
+                    e,
+                )
+            })?;
         }
 
         debug!("creating network namespace");
 
-        IpCmd::add_ns(&name)
-            .map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to add network namespace {}", name), e)
-            )?;
+        IpCmd::add_ns(&name).map_err(|e| {
+            ClusterNetworkError::IpCmdError(format!("failed to add network namespace {}", name), e)
+        })?;
 
         // Bring loopback up
         if let Err(e) = IpCmd::bring_ns_iface_up(&name, "lo") {
             let _ = IpCmd::del_ns(&name);
             return Err(ClusterNetworkError::IpCmdError(
-                format!("failed to bring loopback up in namespace {}", name), e
+                format!("failed to bring loopback up in namespace {}", name),
+                e,
             ));
         }
 
@@ -98,7 +105,7 @@ impl ClusterNetworkManager {
                 name: name.clone(),
                 path,
                 ..Default::default()
-            }
+            },
         );
         Ok(())
     }
@@ -107,54 +114,87 @@ impl ClusterNetworkManager {
         self.namespaces.get(node_name)
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn setup_node_network(&mut self) -> Result<(), ClusterNetworkError> {
-        let _span = info_span!("network.setup_node_network", bridge = %self.bridge_name).entered();
         for (node_id, nn) in self.namespaces.iter_mut() {
             // TODO: Generate random IDs instead, because veth names are limited to 15chars and relying on user input here
             //  will cause errors
             let veth = format!("kh-veth-{}", node_id.0);
             let br_veth = format!("kh-br-{}", node_id.0);
             let _span = info_span!(
-                "network.attach_namespace",
+                "attach_namespace",
                 node_id = %node_id,
                 ns = %nn.name,
                 veth = %veth,
                 bridge_veth = %br_veth,
                 bridge = %self.bridge_name
-            ).entered();
+            )
+            .entered();
 
             debug!("setting up namespace veth pair");
 
             // Create veth pair itself
-            IpCmd::add_iface_peer(&veth, &br_veth).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to add peer {} to network namespace {}", veth, br_veth), e
-            ))?;
+            IpCmd::add_iface_peer(&veth, &br_veth).map_err(|e| {
+                ClusterNetworkError::IpCmdError(
+                    format!(
+                        "failed to add peer {} to network namespace {}",
+                        veth, br_veth
+                    ),
+                    e,
+                )
+            })?;
 
             // Move veth to it's workspace
-            IpCmd::move_iface_to_ns(&veth, &nn.name).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to move node {} to network namespace {}", nn.name, veth), e
-            ))?;
+            IpCmd::move_iface_to_ns(&veth, &nn.name).map_err(|e| {
+                ClusterNetworkError::IpCmdError(
+                    format!(
+                        "failed to move node {} to network namespace {}",
+                        nn.name, veth
+                    ),
+                    e,
+                )
+            })?;
 
             // Setup connection to the bridge
-            IpCmd::set_iface_master(&br_veth, &self.bridge_name).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to set {} as master for {}", self.bridge_name, br_veth), e
-            ))?;
+            IpCmd::set_iface_master(&br_veth, &self.bridge_name).map_err(|e| {
+                ClusterNetworkError::IpCmdError(
+                    format!(
+                        "failed to set {} as master for {}",
+                        self.bridge_name, br_veth
+                    ),
+                    e,
+                )
+            })?;
 
             // Bring both veths up
-            IpCmd::bring_ns_iface_up(&nn.name, &veth).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to set node {} veth up in namespace {}", veth, nn.name), e
-            ))?;
+            IpCmd::bring_ns_iface_up(&nn.name, &veth).map_err(|e| {
+                ClusterNetworkError::IpCmdError(
+                    format!(
+                        "failed to set node {} veth up in namespace {}",
+                        veth, nn.name
+                    ),
+                    e,
+                )
+            })?;
 
-            IpCmd::bring_iface_up(&br_veth).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to set {} up", br_veth), e
-            ))?;
+            IpCmd::bring_iface_up(&br_veth).map_err(|e| {
+                ClusterNetworkError::IpCmdError(format!("failed to set {} up", br_veth), e)
+            })?;
 
-            let addr = self.ip_alloc.allocate_ip().map_err(|e| ClusterNetworkError::IpAllocationError(
-                format!("failed to allocate ip address for {}", veth), e
-            ))?;
-            IpCmd::attach_addr_to_iface(&nn.name, &veth, &addr, self.ip_alloc.subnet()).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to attach new ip address for {}", veth), e
-            ))?;
+            let addr = self.ip_alloc.allocate_ip().map_err(|e| {
+                ClusterNetworkError::IpAllocationError(
+                    format!("failed to allocate ip address for {}", veth),
+                    e,
+                )
+            })?;
+            IpCmd::attach_addr_to_iface(&nn.name, &veth, &addr, self.ip_alloc.subnet()).map_err(
+                |e| {
+                    ClusterNetworkError::IpCmdError(
+                        format!("failed to attach new ip address for {}", veth),
+                        e,
+                    )
+                },
+            )?;
 
             nn.iface = Some(veth);
             nn.bridge_pair = Some(br_veth);
@@ -165,15 +205,18 @@ impl ClusterNetworkManager {
         Ok(())
     }
 
+    #[tracing::instrument(level = "trace", skip(self))]
     pub fn teardown_all(&mut self) -> Result<(), ClusterNetworkError> {
-        let _span = info_span!("network.teardown_all", namespace_count = self.namespaces.len()).entered();
         debug!("tearing down all network namespaces");
         for (_, ns) in self.namespaces.drain() {
-            let _span = info_span!("network.delete_namespace", ns = %ns.name).entered();
+            let _span = info_span!("delete_namespace", ns = %ns.name).entered();
             debug!("deleting network namespace");
-            IpCmd::del_ns(&ns.name).map_err(|e| ClusterNetworkError::IpCmdError(
-                format!("failed to delete namespace {}", &ns.name), e
-            ))?;
+            IpCmd::del_ns(&ns.name).map_err(|e| {
+                ClusterNetworkError::IpCmdError(
+                    format!("failed to delete namespace {}", &ns.name),
+                    e,
+                )
+            })?;
         }
         // TODO: Delete/down bridge interface
         Ok(())

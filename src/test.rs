@@ -1,12 +1,11 @@
-use std::panic::{self, AssertUnwindSafe};
-use std::thread;
-use signal_hook::consts::{SIGINT, SIGQUIT, SIGTERM};
-use signal_hook::iterator::Signals;
 use crate::net::manager::{ClusterNetworkError, ClusterNetworkManager};
 use crate::spec::{ClusterSpec, NodeId, NodeSpec};
-use tracing::{debug, error, info, info_span};
+use std::panic;
 use thiserror::Error;
-use crate::test::TestRunnerError::{TestFailed, TestPanic};
+use tokio::select;
+use tokio::task::JoinError;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, debug_span, error, info, info_span, instrument};
 
 #[derive(Error, Debug)]
 pub enum TestSetupError {
@@ -31,8 +30,11 @@ pub enum TestRunnerError {
     #[error("test failed")]
     TestFailed(#[from] TestFailure),
 
-    #[error("test panic: {0}")]
-    TestPanic(String)
+    #[error("unexpected error")]
+    TestRunFailed(#[from] JoinError),
+
+    #[error("test cancelled")]
+    TestCancelled,
 }
 
 #[derive(Error, Debug)]
@@ -51,9 +53,12 @@ pub struct Test {
     cluster_spec: ClusterSpec,
     network: ClusterNetworkManager,
     nodes: Vec<Node>,
+    cancellation_token: CancellationToken,
 }
 
+#[derive(Debug)]
 pub struct TestContext {
+    cancellation_token: CancellationToken,
 }
 
 // TODO: Using anyhow here is kind of weak for troubleshooting
@@ -64,12 +69,14 @@ impl Test {
             cluster_spec,
             network: ClusterNetworkManager::new(),
             nodes: Vec::new(),
+            cancellation_token: CancellationToken::new(),
         }
     }
 
-    pub fn run<F>(&mut self, tester: F) -> Result<(), TestRunnerError>
+    pub async fn run<F, Fut>(&mut self, test: F) -> Result<(), TestRunnerError>
     where
-        F: FnOnce(TestContext) -> Result<(), TestFailure>,
+        F: FnOnce(TestContext) -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), TestFailure>> + Send,
     {
         let _span = info_span!("test.run", test = self.name).entered();
         info!("running test");
@@ -80,46 +87,45 @@ impl Test {
                 error!(teardown_err = ?teardown_err, "failed to tear down after failed setup");
             }
 
-            return Err(TestRunnerError::TestFailedOnSetup(setup_err))
+            return Err(TestRunnerError::TestFailedOnSetup(setup_err));
         }
 
-        let test_result = panic::catch_unwind(AssertUnwindSafe(|| {
-            // TODO: Wait for liveliness probes as stuff
-            // TODO: Setup test context
-            // TODO: Give execution to the test function
-            tester(TestContext {})
-        }));
+        // TODO: Wait for liveliness probes as stuff
+        // TODO: Setup test context
+        // TODO: Give execution to the test function
+        let ctx = TestContext {
+            cancellation_token: self.cancellation_token.clone(),
+        };
+        let test_task = tokio::spawn(async move { test(ctx).await });
 
-        let teardown_result = self.teardown().map_err(|e| TestRunnerError::TestTeardownFailed(e));
-        if let Err(teardown_err) = teardown_result {
-            error!(teardown_err = ?teardown_err, "failed to tear down after test");
-        }
-
-        match test_result {
-            Ok(r) => {
-                if let Err(test_err) = r {
-                    return Err(TestFailed(test_err))
+        let res: Result<(), TestRunnerError> = select! {
+            join_res = test_task => {
+                match join_res {
+                    Ok(_) => Ok(()),
+                    Err(join_err) if join_err.is_panic() => {
+                        if let Err(e) = self.teardown() {
+                            error!(teardown_err = ?e, "failed to tear down when caught panic in test");
+                        }
+                        panic::resume_unwind(join_err.into_panic())
+                    }
+                    Err(e) => Err(TestRunnerError::TestRunFailed(e)),
                 }
-                Ok(())
             }
-            Err(e) => {
-                if let Some(msg) = e.downcast_ref::<&'static str>() {
-                    return Err(TestPanic(msg.to_string()))
-                } else if let Some(msg) = e.downcast_ref::<String>() {
-                    return Err(TestPanic(msg.to_string()))
-                }
-                panic!("unable to recover test run panic")
+            _ = wait_for_ctrl_c() => {
+                info!("received sigint signal");
+                self.cancellation_token.cancel();
+                Err(TestRunnerError::TestCancelled)
             }
-        }
+        };
+
+        self.teardown()
+            .map_err(|e| TestRunnerError::TestTeardownFailed(e))?;
+
+        res
     }
 
+    #[instrument(level = "info", skip(self))]
     fn setup(&mut self) -> Result<(), TestSetupError> {
-        let _span = info_span!(
-            "test.setup",
-            test = self.name,
-            node_count = self.cluster_spec.nodes.len(),
-            az_count = self.cluster_spec.az.len()
-        ).entered();
         info!("running cluster setup");
 
         self.network_setup()?;
@@ -134,22 +140,27 @@ impl Test {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn network_setup(&mut self) -> Result<(), TestSetupError> {
-        let _span = info_span!("test.setup.network").entered();
-
-        self.network.setup_bridge().map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
+        self.network
+            .setup_bridge()
+            .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
 
         for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
-            let _span = info_span!("test.setup_node", node_id = %node_id).entered();
-            self.network.setup_node_namespace(&node_id).map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
-            self.nodes.push(Node{
+            let _span = info_span!("setup_node", node_id = %node_id).entered();
+            self.network
+                .setup_node_namespace(&node_id)
+                .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
+            self.nodes.push(Node {
                 node_id: node_id.clone(),
                 spec: node_spec.clone(),
             });
         }
 
         debug!(node_count = self.nodes.len(), "setting up node network");
-        self.network.setup_node_network().map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
+        self.network
+            .setup_node_network()
+            .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
 
         debug!(
             namespace = ?self.network.get_node_namespace(&self.nodes.first().unwrap().node_id).unwrap(),
@@ -159,8 +170,8 @@ impl Test {
         Ok(())
     }
 
+    #[instrument(level = "debug", skip(self))]
     fn teardown(&mut self) -> Result<(), TestTeardownError> {
-        let _span = info_span!("test.teardown", test = self.name, node_count = self.nodes.len()).entered();
         info!("running cluster teardown");
 
         // TODO:
@@ -168,8 +179,15 @@ impl Test {
         //  2. Tear down mesh network (disable, delete veth)
         //  +3. Teardown namespaces
 
-        self.network.teardown_all()?;
+        debug_span!("network_teardown").in_scope(|| self.network.teardown_all())?;
 
         Ok(())
     }
+}
+
+async fn wait_for_ctrl_c() {
+    // TODO: Subscribe to other signals like sigquit and sigterm
+    tokio::signal::ctrl_c()
+        .await
+        .expect("failed to install SIGINT handler");
 }
