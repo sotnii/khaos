@@ -38,6 +38,7 @@ fn main() -> Result<()> {
         let mut input = String::new();
         println!("Stopped for debug, press enter to end the test and run teardown...");
         io::stdin().read_line(&mut input).unwrap();
+        Ok(())
     })?;
 
     Ok(())

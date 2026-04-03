@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
+use std::path::Path;
 use std::str::FromStr;
 use thiserror::Error;
-use tracing::{debug, info_span};
+use tracing::{debug, info, info_span};
 use crate::net::ip_alloc::{IpAllocError, LanIpAllocator};
 use crate::net::ip_cmd::{IpCmd, IpCmdError};
 use crate::spec::NodeId;
@@ -64,7 +65,16 @@ impl ClusterNetworkManager {
 
     pub fn setup_node_namespace(&mut self, node_id: &NodeId) -> Result<(), ClusterNetworkError> {
         let name = format!("kh-{}", node_id.0);
+        let path = format!("/run/netns/{}", name);
         let _span = info_span!("network.setup_node_namespace", ns = %name, node_id = %node_id).entered();
+
+        if Path::new(&path).exists() {
+            info!("namespace already exists, tearing it down before recreating");
+            IpCmd::del_ns(&name).map_err(|e| ClusterNetworkError::IpCmdError(
+                format!("failed to delete existing network namespace {}", name), e)
+            )?;
+        }
+
         debug!("creating network namespace");
 
         IpCmd::add_ns(&name)
@@ -72,12 +82,13 @@ impl ClusterNetworkManager {
                 format!("failed to add network namespace {}", name), e)
             )?;
 
-        debug!("network namespace created");
-
         // Bring loopback up
-        IpCmd::bring_ns_iface_up(&name, "lo").map_err(|e| ClusterNetworkError::IpCmdError(
-            format!("failed to bring loopback up in namespace {}", name), e
-        ))?;
+        if let Err(e) = IpCmd::bring_ns_iface_up(&name, "lo") {
+            let _ = IpCmd::del_ns(&name);
+            return Err(ClusterNetworkError::IpCmdError(
+                format!("failed to bring loopback up in namespace {}", name), e
+            ));
+        }
 
         debug!(iface = "lo", "namespace interface is up");
 
@@ -85,7 +96,7 @@ impl ClusterNetworkManager {
             node_id.clone(),
             NetworkNamespace {
                 name: name.clone(),
-                path: format!("/run/netns/{}", name),
+                path,
                 ..Default::default()
             }
         );

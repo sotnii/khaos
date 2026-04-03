@@ -1,9 +1,45 @@
+use std::panic::{self, AssertUnwindSafe};
+use std::thread;
+use signal_hook::consts::{SIGINT, SIGQUIT, SIGTERM};
+use signal_hook::iterator::Signals;
+use crate::net::manager::{ClusterNetworkError, ClusterNetworkManager};
 use crate::spec::{ClusterSpec, NodeId, NodeSpec};
-use anyhow::Result;
+use tracing::{debug, error, info, info_span};
 use thiserror::Error;
-use crate::net::manager::ClusterNetworkManager;
-use tracing::{debug, info, info_span};
+use crate::test::TestRunnerError::{TestFailed, TestPanic};
 
+#[derive(Error, Debug)]
+pub enum TestSetupError {
+    #[error("network setup failed")]
+    ClusterNetworkSetupFailed(#[from] ClusterNetworkError),
+}
+
+#[derive(Error, Debug)]
+pub enum TestTeardownError {
+    #[error("network teardown failed")]
+    ClusterNetworkTeardownFailed(#[from] ClusterNetworkError),
+}
+
+#[derive(Error, Debug)]
+pub enum TestRunnerError {
+    #[error("test run failed on setup stage")]
+    TestFailedOnSetup(#[from] TestSetupError),
+
+    #[error("failed to tear down test environment")]
+    TestTeardownFailed(#[from] TestTeardownError),
+
+    #[error("test failed")]
+    TestFailed(#[from] TestFailure),
+
+    #[error("test panic: {0}")]
+    TestPanic(String)
+}
+
+#[derive(Error, Debug)]
+pub enum TestFailure {
+    #[error("assertion in test failed: {0}")]
+    AssertionFailed(String),
+}
 
 pub struct Node {
     node_id: NodeId,
@@ -15,12 +51,6 @@ pub struct Test {
     cluster_spec: ClusterSpec,
     network: ClusterNetworkManager,
     nodes: Vec<Node>,
-}
-
-#[derive(Debug, Error)]
-pub enum TestError {
-    #[error("failed to create namespace")]
-    SetupFailed(#[source] std::io::Error),
 }
 
 pub struct TestContext {
@@ -37,30 +67,53 @@ impl Test {
         }
     }
 
-    pub fn run<F>(&mut self, tester: F) -> Result<()>
+    pub fn run<F>(&mut self, tester: F) -> Result<(), TestRunnerError>
     where
-        F: Fn(TestContext) -> (),
+        F: FnOnce(TestContext) -> Result<(), TestFailure>,
     {
         let _span = info_span!("test.run", test = self.name).entered();
         info!("running test");
         debug!(cluster_spec = ?self.cluster_spec, "loaded cluster spec");
 
-        // TODO: Set everything up
-        self.setup()?;
+        if let Err(setup_err) = self.setup() {
+            if let Err(teardown_err) = self.teardown() {
+                error!(teardown_err = ?teardown_err, "failed to tear down after failed setup");
+            }
 
-        // TODO: Wait for liveliness probes as stuff
-        // TODO: Setup test context
-        // TODO: Give execution to the test function
-        // TODO: After everything is tested (regardless of the outcome) - clean everything up
-        tester(TestContext {
-        });
+            return Err(TestRunnerError::TestFailedOnSetup(setup_err))
+        }
 
-        self.teardown()?;
+        let test_result = panic::catch_unwind(AssertUnwindSafe(|| {
+            // TODO: Wait for liveliness probes as stuff
+            // TODO: Setup test context
+            // TODO: Give execution to the test function
+            tester(TestContext {})
+        }));
 
-        Ok(())
+        let teardown_result = self.teardown().map_err(|e| TestRunnerError::TestTeardownFailed(e));
+        if let Err(teardown_err) = teardown_result {
+            error!(teardown_err = ?teardown_err, "failed to tear down after test");
+        }
+
+        match test_result {
+            Ok(r) => {
+                if let Err(test_err) = r {
+                    return Err(TestFailed(test_err))
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if let Some(msg) = e.downcast_ref::<&'static str>() {
+                    return Err(TestPanic(msg.to_string()))
+                } else if let Some(msg) = e.downcast_ref::<String>() {
+                    return Err(TestPanic(msg.to_string()))
+                }
+                panic!("unable to recover test run panic")
+            }
+        }
     }
 
-    fn setup(&mut self) -> Result<()> {
+    fn setup(&mut self) -> Result<(), TestSetupError> {
         let _span = info_span!(
             "test.setup",
             test = self.name,
@@ -69,24 +122,7 @@ impl Test {
         ).entered();
         info!("running cluster setup");
 
-        self.network.setup_bridge()?;
-
-        for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
-            let _span = info_span!("test.setup_node", node_id = %node_id).entered();
-            self.network.setup_node_namespace(&node_id)?;
-            self.nodes.push(Node{
-                node_id: node_id.clone(),
-                spec: node_spec.clone(),
-            });
-        }
-
-        debug!(node_count = self.nodes.len(), "setting up node network");
-        self.network.setup_node_network()?;
-
-        debug!(
-            namespace = ?self.network.get_node_namespace(&self.nodes.first().unwrap().node_id).unwrap(),
-            "first node namespace ready"
-        );
+        self.network_setup()?;
 
         // TODO:
         //  +1. Setup namespaces
@@ -98,7 +134,32 @@ impl Test {
         Ok(())
     }
 
-    fn teardown(&mut self) -> Result<()> {
+    fn network_setup(&mut self) -> Result<(), TestSetupError> {
+        let _span = info_span!("test.setup.network").entered();
+
+        self.network.setup_bridge().map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
+
+        for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
+            let _span = info_span!("test.setup_node", node_id = %node_id).entered();
+            self.network.setup_node_namespace(&node_id).map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
+            self.nodes.push(Node{
+                node_id: node_id.clone(),
+                spec: node_spec.clone(),
+            });
+        }
+
+        debug!(node_count = self.nodes.len(), "setting up node network");
+        self.network.setup_node_network().map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
+
+        debug!(
+            namespace = ?self.network.get_node_namespace(&self.nodes.first().unwrap().node_id).unwrap(),
+            "first node namespace ready"
+        );
+
+        Ok(())
+    }
+
+    fn teardown(&mut self) -> Result<(), TestTeardownError> {
         let _span = info_span!("test.teardown", test = self.name, node_count = self.nodes.len()).entered();
         info!("running cluster teardown");
 
