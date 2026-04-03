@@ -35,13 +35,13 @@ impl IpCmd {
         Ok(())
     }
     
-    pub fn bring_veth_up(name: impl Into<String>) -> Result<(), IpCmdError> {
+    pub fn bring_iface_up(name: impl Into<String>) -> Result<(), IpCmdError> {
         let name = name.into();
         IpCmd::cmd(["link", "set", name.as_str(), "up"])?;
         Ok(())
     }
     
-    pub fn bring_ns_veth_up(ns: impl Into<String>, name: impl Into<String>) -> Result<(), IpCmdError> {
+    pub fn bring_ns_iface_up(ns: impl Into<String>, name: impl Into<String>) -> Result<(), IpCmdError> {
         let ns = ns.into();
         let name = name.into();
         IpCmd::ns_exec(ns.as_str(), ["ip", "link", "set", name.as_str(), "up"])?;
@@ -60,14 +60,14 @@ impl IpCmd {
         Ok(())
     }
 
-    pub fn attach_addr_to_veth(ns: &String, veth: &String, addr: &Ipv4Addr, subnet: LanSubnet) -> Result<(), IpCmdError> {
+    pub fn attach_addr_to_iface(ns: &String, veth: &String, addr: &Ipv4Addr, subnet: LanSubnet) -> Result<(), IpCmdError> {
         let addr_with_subnet = format!("{}/{}", addr, subnet.cidr.prefix);
         // ip netns exec ns1 ip addr add 10.0.0.1/24 dev veth-ns1
         IpCmd::ns_exec(&ns, ["ip", "addr", "add", &addr_with_subnet, "dev", &veth])?;
         Ok(())
     }
-    
-    pub fn add_veth_peer(veth: impl Into<String>, peer: impl Into<String>) -> Result<(), IpCmdError> {
+
+    pub fn add_iface_peer(veth: impl Into<String>, peer: impl Into<String>) -> Result<(), IpCmdError> {
         let veth = veth.into();
         let peer = peer.into();
         IpCmd::cmd([
@@ -83,14 +83,14 @@ impl IpCmd {
         Ok(())
     }
 
-    pub fn move_veth_to_ns(veth: impl Into<String>, ns: impl Into<String>) -> Result<(), IpCmdError> {
+    pub fn move_iface_to_ns(veth: impl Into<String>, ns: impl Into<String>) -> Result<(), IpCmdError> {
         let veth = veth.into();
         let ns = ns.into();
         IpCmd::cmd(["link", "set", veth.as_str(), "netns", ns.as_str()])?;
         Ok(())
     }
 
-    pub fn set_veth_master(veth: impl Into<String>, master: impl Into<String>) -> Result<(), IpCmdError> {
+    pub fn set_iface_master(veth: impl Into<String>, master: impl Into<String>) -> Result<(), IpCmdError> {
         let veth = veth.into();
         let master = master.into();
         IpCmd::cmd(["link", "set", veth.as_str(), "master", master.as_str()])?;

@@ -54,7 +54,7 @@ impl ClusterNetworkManager {
 
         if !up {
             debug!(bridge = %self.bridge_name, "bringing bridge interface up");
-            IpCmd::bring_veth_up(&self.bridge_name)
+            IpCmd::bring_iface_up(&self.bridge_name)
                 .map_err(|e| ClusterNetworkError::IpCmdError("failed to bring bridge up".to_string(), e))?;
         }
 
@@ -75,7 +75,7 @@ impl ClusterNetworkManager {
         debug!("network namespace created");
 
         // Bring loopback up
-        IpCmd::bring_ns_veth_up(&name, "lo").map_err(|e| ClusterNetworkError::IpCmdError(
+        IpCmd::bring_ns_iface_up(&name, "lo").map_err(|e| ClusterNetworkError::IpCmdError(
             format!("failed to bring loopback up in namespace {}", name), e
         ))?;
 
@@ -115,33 +115,33 @@ impl ClusterNetworkManager {
             debug!("setting up namespace veth pair");
 
             // Create veth pair itself
-            IpCmd::add_veth_peer(&veth, &br_veth).map_err(|e| ClusterNetworkError::IpCmdError(
+            IpCmd::add_iface_peer(&veth, &br_veth).map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to add peer {} to network namespace {}", veth, br_veth), e
             ))?;
 
             // Move veth to it's workspace
-            IpCmd::move_veth_to_ns(&veth, &nn.name).map_err(|e| ClusterNetworkError::IpCmdError(
+            IpCmd::move_iface_to_ns(&veth, &nn.name).map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to move node {} to network namespace {}", nn.name, veth), e
             ))?;
 
             // Setup connection to the bridge
-            IpCmd::set_veth_master(&br_veth, &self.bridge_name).map_err(|e| ClusterNetworkError::IpCmdError(
+            IpCmd::set_iface_master(&br_veth, &self.bridge_name).map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to set {} as master for {}", self.bridge_name, br_veth), e
             ))?;
 
             // Bring both veths up
-            IpCmd::bring_ns_veth_up(&nn.name, &veth).map_err(|e| ClusterNetworkError::IpCmdError(
+            IpCmd::bring_ns_iface_up(&nn.name, &veth).map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to set node {} veth up in namespace {}", veth, nn.name), e
             ))?;
 
-            IpCmd::bring_veth_up(&br_veth).map_err(|e| ClusterNetworkError::IpCmdError(
+            IpCmd::bring_iface_up(&br_veth).map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to set {} up", br_veth), e
             ))?;
 
             let addr = self.ip_alloc.allocate_ip().map_err(|e| ClusterNetworkError::IpAllocationError(
                 format!("failed to allocate ip address for {}", veth), e
             ))?;
-            IpCmd::attach_addr_to_veth(&nn.name, &veth, &addr, self.ip_alloc.subnet()).map_err(|e| ClusterNetworkError::IpCmdError(
+            IpCmd::attach_addr_to_iface(&nn.name, &veth, &addr, self.ip_alloc.subnet()).map_err(|e| ClusterNetworkError::IpCmdError(
                 format!("failed to attach new ip address for {}", veth), e
             ))?;
 
