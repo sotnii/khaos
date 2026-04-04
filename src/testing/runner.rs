@@ -1,6 +1,6 @@
 use crate::containers::manager::{ContainerManager, ContainerManagerError};
 use crate::net::manager::{ClusterNetworkError, ClusterNetworkManager};
-use crate::spec::{ClusterSpec, ContainerSpec, NodeId, NodeSpec};
+use crate::spec::{ClusterSpec, NodeId, NodeSpec};
 use crate::testing::ctx::TestContext;
 use nanoid::nanoid;
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::select;
 use tokio::task::JoinError;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, debug_span, error, info, info_span, instrument};
+use tracing::{debug, debug_span, error, info, info_span, instrument, warn};
 
 #[derive(Error, Debug)]
 pub enum TestSetupError {
@@ -18,6 +18,9 @@ pub enum TestSetupError {
 
     #[error("containers setup failed")]
     ContainerSetupFailed(#[from] ContainerManagerError),
+
+    #[error("unexpected error: {0}")]
+    UnexpectedError(&'static str),
 }
 
 #[derive(Error, Debug)]
@@ -71,7 +74,7 @@ pub struct Test {
 impl Test {
     pub fn new(name: &'static str, cluster_spec: ClusterSpec) -> Test {
         Test {
-            id: nanoid!(),
+            id: resource_id(),
             name,
             cluster_spec,
             network: ClusterNetworkManager::new(),
@@ -88,7 +91,6 @@ impl Test {
     {
         let _span = info_span!("test.run", test = self.name, id = self.id).entered();
         info!("running test");
-        debug!(cluster_spec = ?self.cluster_spec, "loaded cluster spec");
 
         if let Err(setup_err) = self.setup().await {
             if let Err(teardown_err) = self.teardown() {
@@ -117,8 +119,12 @@ impl Test {
                     Err(e) => Err(TestRunnerError::TestRunFailed(e)),
                 }
             }
-            _ = wait_for_ctrl_c() => {
-                info!("received sigint signal");
+            v = wait_for_ctrl_c() => {
+                if let Err(e) = v {
+                    warn!("cancelling test due to failed attempt to install SIGINT handler: {e}");
+                } else {
+                    info!("received sigint signal");
+                }
                 self.cancellation_token.cancel();
                 Err(TestRunnerError::TestCancelled)
             }
@@ -139,7 +145,7 @@ impl Test {
                 node_id.clone(),
                 Node {
                     node_id: node_id.clone(),
-                    resource_id: nanoid!(),
+                    resource_id: resource_id(),
                     spec: node_spec.clone(),
                 },
             );
@@ -163,10 +169,14 @@ impl Test {
         self.containerd.connect().await?;
 
         for (node_id, node) in self.nodes.iter_mut() {
-            let ns = self
-                .network
-                .get_namespace(node_id.raw())
-                .expect("node namespace expected to be setup before running containers");
+            let ns = self.network.get_namespace(node_id.raw());
+
+            if let None = ns {
+                return Err(TestSetupError::UnexpectedError(
+                    "node network namespace is required to be present for node container setup",
+                ));
+            }
+
             for spec in node.spec.container_specs.clone() {
                 let container_name = spec.name().unwrap_or(spec.image_basename());
                 self.containerd
@@ -174,7 +184,7 @@ impl Test {
                         self.id.clone(),
                         container_id(self.id.clone(), node, container_name),
                         spec,
-                        ns.clone(),
+                        &ns.unwrap().path,
                     )
                     .await?;
             }
@@ -219,11 +229,9 @@ impl Test {
     }
 }
 
-async fn wait_for_ctrl_c() {
+async fn wait_for_ctrl_c() -> std::io::Result<()> {
     // TODO: Subscribe to other signals like sigquit and sigterm
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install SIGINT handler");
+    tokio::signal::ctrl_c().await
 }
 
 pub fn container_id(test_id: String, node: &Node, container_name: String) -> String {
@@ -231,4 +239,9 @@ pub fn container_id(test_id: String, node: &Node, container_name: String) -> Str
         "kh-{test_id}-{}-{container_name}-{}",
         node.node_id, node.resource_id
     )
+}
+
+pub fn resource_id() -> String {
+    let alphabet = ('a'..'z').collect::<Vec<_>>();
+    nanoid!(5, alphabet.as_slice())
 }

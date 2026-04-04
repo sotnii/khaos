@@ -1,8 +1,7 @@
 use crate::containers::manager::ContainerManagerError::{
     ConnectionUninitialized, UnexpectedImageTargetMediaType,
 };
-use crate::net::manager::NetworkNamespace;
-use crate::spec::{ContainerSpec, NodeId};
+use crate::spec::ContainerSpec;
 use containerd_client::services::v1::content_client::ContentClient;
 use containerd_client::services::v1::images_client::ImagesClient;
 use containerd_client::services::v1::transfer_client::TransferClient;
@@ -24,7 +23,6 @@ use oci_spec::runtime::{
 use oci_spec::OciSpecError;
 use serde_json::Error;
 use std::env::consts;
-use std::fmt::{Display, Formatter};
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::{debug, debug_span, info_span, instrument};
@@ -112,11 +110,11 @@ impl ContainerManager {
         container_id: String,
         resource_id: String,
         container_spec: ContainerSpec,
-        ns: NetworkNamespace,
+        ns_path: &String,
     ) -> Result<(), ContainerManagerError> {
         let image = self.pull_image(&container_spec.image_ref).await?;
         let cfg = self.get_image_config(&image).await?;
-        let spec = self.build_oci_spec(&ns.path, cfg)?;
+        let spec = self.build_oci_spec(ns_path, cfg)?;
 
         debug!(spec = serde_json::to_string(&spec).unwrap(), "spec built");
 
