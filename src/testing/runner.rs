@@ -152,7 +152,7 @@ impl Test {
         for (node_id, node) in self.nodes.iter_mut() {
             let ns = self
                 .network
-                .get_node_namespace(node_id)
+                .get_namespace(node_id.raw())
                 .expect("node namespace expected to be setup before running containers");
             for spec in node.spec.container_specs.clone() {
                 self.containerd
@@ -173,7 +173,7 @@ impl Test {
         for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
             let _span = info_span!("setup_node", node_id = %node_id).entered();
             self.network
-                .setup_node_namespace(&node_id)
+                .setup_namespace(node_id.raw().clone())
                 .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
             self.nodes.insert(
                 node_id.clone(),

@@ -45,6 +45,12 @@ impl Display for NodeId {
     }
 }
 
+impl NodeId {
+    pub fn raw(&self) -> &String {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct NodeSpec {
     pub container_specs: Vec<ContainerSpec>,

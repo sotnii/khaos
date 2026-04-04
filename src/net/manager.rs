@@ -1,6 +1,5 @@
 use crate::net::ip_alloc::{IpAllocError, LanIpAllocator};
 use crate::net::ip_cmd::{IpCmd, IpCmdError};
-use crate::spec::NodeId;
 use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::Path;
@@ -20,7 +19,7 @@ pub enum ClusterNetworkError {
 /// between nodes via veth pairs.
 #[derive(Debug)]
 pub struct ClusterNetworkManager {
-    namespaces: HashMap<NodeId, NetworkNamespace>,
+    namespaces: HashMap<String, NetworkNamespace>,
     bridge_name: String,
     bridge_up: bool,
     ip_alloc: LanIpAllocator,
@@ -68,15 +67,15 @@ impl ClusterNetworkManager {
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn setup_node_namespace(&mut self, node_id: &NodeId) -> Result<(), ClusterNetworkError> {
-        let name = format!("kh-{}", node_id.0);
-        let path = format!("/run/netns/{}", name);
+    pub fn setup_namespace(&mut self, key: String) -> Result<(), ClusterNetworkError> {
+        let namespace_name = format!("kh-{}", key);
+        let path = format!("/run/netns/{}", key);
 
         if Path::new(&path).exists() {
             info!("namespace already exists, tearing it down before recreating");
-            IpCmd::del_ns(&name).map_err(|e| {
+            IpCmd::del_ns(&namespace_name).map_err(|e| {
                 ClusterNetworkError::IpCmdError(
-                    format!("failed to delete existing network namespace {}", name),
+                    format!("failed to delete existing network namespace {}", key),
                     e,
                 )
             })?;
@@ -84,15 +83,15 @@ impl ClusterNetworkManager {
 
         debug!("creating network namespace");
 
-        IpCmd::add_ns(&name).map_err(|e| {
-            ClusterNetworkError::IpCmdError(format!("failed to add network namespace {}", name), e)
+        IpCmd::add_ns(&namespace_name).map_err(|e| {
+            ClusterNetworkError::IpCmdError(format!("failed to add network namespace {}", key), e)
         })?;
 
         // Bring loopback up
-        if let Err(e) = IpCmd::bring_ns_iface_up(&name, "lo") {
-            let _ = IpCmd::del_ns(&name);
+        if let Err(e) = IpCmd::bring_ns_iface_up(&namespace_name, "lo") {
+            let _ = IpCmd::del_ns(&namespace_name);
             return Err(ClusterNetworkError::IpCmdError(
-                format!("failed to bring loopback up in namespace {}", name),
+                format!("failed to bring loopback up in namespace {}", key),
                 e,
             ));
         }
@@ -100,9 +99,9 @@ impl ClusterNetworkManager {
         debug!(iface = "lo", "namespace interface is up");
 
         self.namespaces.insert(
-            node_id.clone(),
+            key,
             NetworkNamespace {
-                name: name.clone(),
+                name: namespace_name,
                 path,
                 ..Default::default()
             },
@@ -110,20 +109,20 @@ impl ClusterNetworkManager {
         Ok(())
     }
 
-    pub fn get_node_namespace(&self, node_id: &NodeId) -> Option<&NetworkNamespace> {
-        self.namespaces.get(node_id)
+    pub fn get_namespace(&self, name: &String) -> Option<&NetworkNamespace> {
+        self.namespaces.get(name)
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
     pub fn setup_node_network(&mut self) -> Result<(), ClusterNetworkError> {
-        for (node_id, nn) in self.namespaces.iter_mut() {
+        for (name, nn) in self.namespaces.iter_mut() {
             // TODO: Generate random IDs instead, because veth names are limited to 15chars and relying on user input here
             //  will cause errors
-            let veth = format!("kh-veth-{}", node_id.0);
-            let br_veth = format!("kh-br-{}", node_id.0);
+            let veth = format!("kh-veth-{}", name);
+            let br_veth = format!("kh-br-{}", name);
             let _span = info_span!(
                 "attach_namespace",
-                node_id = %node_id,
+                name = %name,
                 ns = %nn.name,
                 veth = %veth,
                 bridge_veth = %br_veth,
