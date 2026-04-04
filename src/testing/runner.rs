@@ -1,6 +1,6 @@
 use crate::containers::manager::{ContainerManager, ContainerManagerError};
 use crate::net::manager::{ClusterNetworkError, ClusterNetworkManager};
-use crate::spec::{ClusterSpec, NodeId, NodeSpec};
+use crate::spec::{ClusterSpec, ContainerSpec, NodeId, NodeSpec};
 use crate::testing::ctx::TestContext;
 use nanoid::nanoid;
 use std::collections::HashMap;
@@ -56,6 +56,8 @@ pub struct Node {
     spec: NodeSpec,
 }
 
+impl Node {}
+
 pub struct Test {
     id: String,
     name: &'static str,
@@ -84,7 +86,7 @@ impl Test {
         F: FnOnce(TestContext) -> Fut + Send + 'static,
         Fut: Future<Output = Result<(), TestFailure>> + Send,
     {
-        let _span = info_span!("test.run", test = self.name).entered();
+        let _span = info_span!("test.run", test = self.name, id = self.id).entered();
         info!("running test");
         debug!(cluster_spec = ?self.cluster_spec, "loaded cluster spec");
 
@@ -132,6 +134,17 @@ impl Test {
     async fn setup(&mut self) -> Result<(), TestSetupError> {
         info!("running cluster setup");
 
+        for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
+            self.nodes.insert(
+                node_id.clone(),
+                Node {
+                    node_id: node_id.clone(),
+                    resource_id: nanoid!(),
+                    spec: node_spec.clone(),
+                },
+            );
+        }
+
         self.network_setup()?;
 
         self.container_setup().await?;
@@ -155,8 +168,14 @@ impl Test {
                 .get_namespace(node_id.raw())
                 .expect("node namespace expected to be setup before running containers");
             for spec in node.spec.container_specs.clone() {
+                let container_name = spec.name().unwrap_or(spec.image_basename());
                 self.containerd
-                    .run_container(self.id.clone(), node_id.clone(), spec, ns.clone())
+                    .run_container(
+                        self.id.clone(),
+                        container_id(self.id.clone(), node, container_name),
+                        spec,
+                        ns.clone(),
+                    )
                     .await?;
             }
         }
@@ -170,19 +189,11 @@ impl Test {
             .setup_bridge()
             .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
 
-        for (node_id, node_spec) in self.cluster_spec.nodes.iter() {
+        for node_id in self.cluster_spec.nodes.keys() {
             let _span = info_span!("setup_node", node_id = %node_id).entered();
             self.network
                 .setup_namespace(node_id.raw().clone())
                 .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
-            self.nodes.insert(
-                node_id.clone(),
-                Node {
-                    node_id: node_id.clone(),
-                    resource_id: nanoid!(),
-                    spec: node_spec.clone(),
-                },
-            );
         }
 
         debug!(node_count = self.nodes.len(), "setting up node network");
@@ -213,4 +224,11 @@ async fn wait_for_ctrl_c() {
     tokio::signal::ctrl_c()
         .await
         .expect("failed to install SIGINT handler");
+}
+
+pub fn container_id(test_id: String, node: &Node, container_name: String) -> String {
+    format!(
+        "kh-{test_id}-{}-{container_name}-{}",
+        node.node_id, node.resource_id
+    )
 }

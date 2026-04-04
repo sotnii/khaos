@@ -49,6 +49,10 @@ pub enum ContainerManagerError {
     ImageManifestNotFoundForCurrentArch,
     #[error("unexpected image target media type: {0}, expected image index or image manifest")]
     UnexpectedImageTargetMediaType(MediaType),
+    #[error("image {image} was missing after successful pull")]
+    ImageMissingAfterSuccessfulPull { image: String },
+    #[error("image missing target descriptor for image {image}")]
+    MissingImageManifestTargetDescriptor { image: String },
 }
 
 pub struct ContainerManager {
@@ -102,10 +106,11 @@ impl ContainerManager {
         Ok(self.channel.clone().unwrap())
     }
 
+    #[instrument(skip(self), level = "debug")]
     pub async fn run_container(
         &mut self,
-        test_id: String,
-        node_id: NodeId,
+        container_id: String,
+        resource_id: String,
         container_spec: ContainerSpec,
         ns: NetworkNamespace,
     ) -> Result<(), ContainerManagerError> {
@@ -168,9 +173,12 @@ impl ContainerManager {
             .await
             .map_err(|e| ContainerManagerError::ImagePullFailed(image_ref.clone(), e))?;
 
-        let pulled_image = self.fetch_image(image_ref).await?;
-        Ok(pulled_image
-            .expect("expected to successfully fetch image from containerd after TransferRequest"))
+        match self.fetch_image(image_ref).await? {
+            Some(i) => Ok(i),
+            None => Err(ContainerManagerError::ImageMissingAfterSuccessfulPull {
+                image: image_ref.to_string(),
+            }),
+        }
     }
 
     #[instrument(skip(self), err)]
@@ -178,10 +186,7 @@ impl ContainerManager {
         &self,
         image_ref: &String,
     ) -> Result<Option<Image>, ContainerManagerError> {
-        let ch = self
-            .channel
-            .as_ref()
-            .expect("containerd channel was not setup");
+        let ch = self.ensure_connected()?;
         let mut images = ImagesClient::new(ch.clone());
 
         let resp = images
@@ -198,9 +203,7 @@ impl ContainerManager {
             Err(e) => Err(ContainerManagerError::ImagePullFailed(image_ref.clone(), e)),
             Ok(r) => {
                 let r = r.get_ref().clone();
-                Ok(Some(r.image.expect(
-                    "image expected to be present in containerd GetImageRequest response",
-                )))
+                Ok(r.image)
             }
         }
     }
@@ -227,13 +230,17 @@ impl ContainerManager {
         &self,
         image: &Image,
     ) -> Result<ImageManifest, ContainerManagerError> {
-        let target = image
-            .target
-            .clone()
-            .expect("image expected to have target descriptor");
+        if let None = image.target {
+            return Err(
+                ContainerManagerError::MissingImageManifestTargetDescriptor {
+                    image: image.name.clone(),
+                },
+            );
+        }
 
-        let target_bytes = self.read_content_to_blob(&target.digest).await?;
-        match MediaType::from(target.media_type.as_str()) {
+        let t = image.target.as_ref().unwrap();
+        let target_bytes = self.read_content_to_blob(&t.digest).await?;
+        match MediaType::from(t.media_type.as_str()) {
             MediaType::ImageManifest => Ok(ImageManifest::from_reader(target_bytes.as_slice())?),
             MediaType::ImageIndex => {
                 let index = ImageIndex::from_reader(target_bytes.as_slice())?;

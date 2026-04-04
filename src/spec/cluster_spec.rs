@@ -92,7 +92,7 @@ impl AZSpec {
 #[derive(Clone, Debug, Default)]
 pub struct ContainerSpec {
     pub image_ref: String,
-    pub name: Option<String>,
+    name: Option<String>,
 }
 
 impl ContainerSpec {
@@ -103,9 +103,27 @@ impl ContainerSpec {
             ..Default::default()
         }
     }
+
+    pub fn name(&self) -> Option<String> {
+        self.name.clone()
+    }
+
     pub fn named(&self, name: impl Into<String>) -> ContainerSpec {
         let mut s = self.clone();
         s.name = Some(name.into());
         s
+    }
+
+    // TODO: awful and will likely break, but good for now
+    pub fn image_basename(&self) -> String {
+        self.image_ref
+            .split('/')
+            .last()
+            .unwrap()
+            .split(':')
+            .collect::<Vec<&str>>()
+            .first()
+            .unwrap()
+            .to_string()
     }
 }
