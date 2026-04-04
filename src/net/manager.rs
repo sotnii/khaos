@@ -110,8 +110,8 @@ impl ClusterNetworkManager {
         Ok(())
     }
 
-    pub fn get_node_namespace(&self, node_name: &NodeId) -> Option<&NetworkNamespace> {
-        self.namespaces.get(node_name)
+    pub fn get_node_namespace(&self, node_id: &NodeId) -> Option<&NetworkNamespace> {
+        self.namespaces.get(node_id)
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
@@ -225,7 +225,7 @@ impl ClusterNetworkManager {
 #[derive(Debug, Clone, Default)]
 pub struct NetworkNamespace {
     pub name: String,
-    path: String,
+    pub path: String,
     iface: Option<String>,
     bridge_pair: Option<String>,
     allocated_lan_ip: Option<Ipv4Addr>,

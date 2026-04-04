@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 
-pub mod common;
-
 #[derive(Debug, Clone)]
 pub struct ClusterSpec {
     pub name: String,
@@ -49,12 +47,7 @@ impl Display for NodeId {
 
 #[derive(Clone, Debug)]
 pub struct NodeSpec {
-    container_specs: Vec<ContainerSpec>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ContainerSpec {
-    pub image: &'static str,
+    pub container_specs: Vec<ContainerSpec>,
 }
 
 impl NodeSpec {
@@ -87,5 +80,26 @@ impl AZSpec {
         let mut v = self.clone();
         v.nodes.push(node.clone());
         v
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ContainerSpec {
+    pub image_ref: String,
+    pub name: Option<String>,
+}
+
+impl ContainerSpec {
+    // TODO: Normalize image refs
+    pub fn new(image_ref: impl Into<String>) -> ContainerSpec {
+        ContainerSpec {
+            image_ref: image_ref.into(),
+            ..Default::default()
+        }
+    }
+    pub fn named(&self, name: impl Into<String>) -> ContainerSpec {
+        let mut s = self.clone();
+        s.name = Some(name.into());
+        s
     }
 }

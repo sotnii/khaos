@@ -1,6 +1,9 @@
+use crate::containers::manager::{ContainerManager, ContainerManagerError};
 use crate::net::manager::{ClusterNetworkError, ClusterNetworkManager};
 use crate::spec::{ClusterSpec, NodeId, NodeSpec};
 use crate::testing::ctx::TestContext;
+use nanoid::nanoid;
+use std::collections::HashMap;
 use std::panic;
 use thiserror::Error;
 use tokio::select;
@@ -12,6 +15,9 @@ use tracing::{debug, debug_span, error, info, info_span, instrument};
 pub enum TestSetupError {
     #[error("network setup failed")]
     ClusterNetworkSetupFailed(#[from] ClusterNetworkError),
+
+    #[error("containers setup failed")]
+    ContainerSetupFailed(#[from] ContainerManagerError),
 }
 
 #[derive(Error, Debug)]
@@ -46,25 +52,30 @@ pub enum TestFailure {
 
 pub struct Node {
     node_id: NodeId,
+    resource_id: String,
     spec: NodeSpec,
 }
 
 pub struct Test {
+    id: String,
     name: &'static str,
     cluster_spec: ClusterSpec,
     network: ClusterNetworkManager,
-    nodes: Vec<Node>,
+    nodes: HashMap<NodeId, Node>,
     cancellation_token: CancellationToken,
+    containerd: ContainerManager,
 }
 
 impl Test {
     pub fn new(name: &'static str, cluster_spec: ClusterSpec) -> Test {
         Test {
+            id: nanoid!(),
             name,
             cluster_spec,
             network: ClusterNetworkManager::new(),
-            nodes: Vec::new(),
+            nodes: HashMap::new(),
             cancellation_token: CancellationToken::new(),
+            containerd: ContainerManager::new(None),
         }
     }
 
@@ -77,7 +88,7 @@ impl Test {
         info!("running test");
         debug!(cluster_spec = ?self.cluster_spec, "loaded cluster spec");
 
-        if let Err(setup_err) = self.setup() {
+        if let Err(setup_err) = self.setup().await {
             if let Err(teardown_err) = self.teardown() {
                 error!(teardown_err = ?teardown_err, "failed to tear down after failed setup");
             }
@@ -118,17 +129,37 @@ impl Test {
     }
 
     #[instrument(level = "info", skip(self))]
-    fn setup(&mut self) -> Result<(), TestSetupError> {
+    async fn setup(&mut self) -> Result<(), TestSetupError> {
         info!("running cluster setup");
 
         self.network_setup()?;
 
+        self.container_setup().await?;
         // TODO:
         //  +1. Setup namespaces
         //  +2. Setup full mesh network between nodes
         //  3. Spawn containers with containerd
         //  4. Wait for availability for containers
         //  5. HOORAY!
+
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip(self))]
+    async fn container_setup(&mut self) -> Result<(), TestSetupError> {
+        self.containerd.connect().await?;
+
+        for (node_id, node) in self.nodes.iter_mut() {
+            let ns = self
+                .network
+                .get_node_namespace(node_id)
+                .expect("node namespace expected to be setup before running containers");
+            for spec in node.spec.container_specs.clone() {
+                self.containerd
+                    .run_container(self.id.clone(), node_id.clone(), spec, ns.clone())
+                    .await?;
+            }
+        }
 
         Ok(())
     }
@@ -144,21 +175,20 @@ impl Test {
             self.network
                 .setup_node_namespace(&node_id)
                 .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
-            self.nodes.push(Node {
-                node_id: node_id.clone(),
-                spec: node_spec.clone(),
-            });
+            self.nodes.insert(
+                node_id.clone(),
+                Node {
+                    node_id: node_id.clone(),
+                    resource_id: nanoid!(),
+                    spec: node_spec.clone(),
+                },
+            );
         }
 
         debug!(node_count = self.nodes.len(), "setting up node network");
         self.network
             .setup_node_network()
             .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
-
-        debug!(
-            namespace = ?self.network.get_node_namespace(&self.nodes.first().unwrap().node_id).unwrap(),
-            "first node namespace ready"
-        );
 
         Ok(())
     }
