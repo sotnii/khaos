@@ -2,11 +2,17 @@ use crate::containers::manager::ContainerManagerError::{
     ConnectionUninitialized, UnexpectedImageTargetMediaType,
 };
 use crate::spec::ContainerSpec;
+use containerd_client::services::v1::container::Runtime;
+use containerd_client::services::v1::containers_client::ContainersClient;
 use containerd_client::services::v1::content_client::ContentClient;
 use containerd_client::services::v1::images_client::ImagesClient;
+use containerd_client::services::v1::snapshots::snapshots_client::SnapshotsClient;
+use containerd_client::services::v1::snapshots::PrepareSnapshotRequest;
+use containerd_client::services::v1::tasks_client::TasksClient;
 use containerd_client::services::v1::transfer_client::TransferClient;
 use containerd_client::services::v1::{
-    GetImageRequest, Image, ReadContentRequest, TransferOptions, TransferRequest,
+    Container, CreateContainerRequest, CreateTaskRequest, GetImageRequest, Image,
+    ReadContentRequest, StartRequest, TransferOptions, TransferRequest,
 };
 use containerd_client::tonic::transport::{Channel, Error as TonicError};
 use containerd_client::tonic::{Code, Request, Status};
@@ -21,6 +27,7 @@ use oci_spec::runtime::{
     SpecBuilder, UserBuilder,
 };
 use oci_spec::OciSpecError;
+use prost_types::Any;
 use serde_json::Error;
 use std::env::consts;
 use std::path::PathBuf;
@@ -39,8 +46,8 @@ pub enum ContainerManagerError {
     ContentReadFailed(#[source] Status),
     #[error("failed to parse contents of a containerd document")]
     ParsingFailed(#[source] Error),
-    #[error("")]
-    ImageConfigMissing,
+    #[error("image config is missing for {0}")]
+    ImageConfigMissing(String),
     #[error("failed to build oci spec")]
     OciSpecBuildFailed(#[from] OciSpecError),
     #[error("image index is missing manifest suitable for current arch")]
@@ -51,6 +58,10 @@ pub enum ContainerManagerError {
     ImageMissingAfterSuccessfulPull { image: String },
     #[error("image missing target descriptor for image {image}")]
     MissingImageManifestTargetDescriptor { image: String },
+    #[error("failed to create container {1}")]
+    ContainerCreationFailed(#[source] Status, String),
+    #[error("container {1} failed to start")]
+    ContainerStartFailed(#[source] Status, String),
 }
 
 pub struct ContainerManager {
@@ -63,8 +74,8 @@ const CONTAINERD_NAMESPACE: &str = "khaos";
 const SNAPSHOTTER: &str = "overlayfs";
 const RUNTIME_NAME: &str = "io.containerd.runc.v2";
 const OCI_RUNTIME_SPEC_VER: &str = "1.3.0";
-
 const ROOTFS_PATH: &str = "rootfs";
+const CONTAINER_SPEC_TYPE_URL: &str = "types.containerd.io/opencontainers/runtime-spec/1/Spec";
 
 impl ContainerManager {
     // TODO:
@@ -97,7 +108,7 @@ impl ContainerManager {
         Ok(())
     }
 
-    fn ensure_connected(&self) -> Result<Channel, ContainerManagerError> {
+    fn ensure_channel(&self) -> Result<Channel, ContainerManagerError> {
         if self.channel.is_none() {
             return Err(ConnectionUninitialized);
         }
@@ -108,15 +119,35 @@ impl ContainerManager {
     pub async fn run_container(
         &mut self,
         container_id: String,
-        resource_id: String,
+        snapshot_key: String,
         container_spec: ContainerSpec,
         ns_path: &String,
     ) -> Result<(), ContainerManagerError> {
         let image = self.pull_image(&container_spec.image_ref).await?;
-        let cfg = self.get_image_config(&image).await?;
-        let spec = self.build_oci_spec(ns_path, cfg)?;
+        let image_cfg = self.get_image_config(&image).await?;
+        let cfg = image_cfg.config().as_ref();
+        if cfg.is_none() {
+            return Err(ContainerManagerError::ImageConfigMissing(
+                container_spec.image_ref,
+            ));
+        }
+        let spec = self.build_oci_spec(ns_path, cfg.unwrap().clone())?;
 
-        debug!(spec = serde_json::to_string(&spec).unwrap(), "spec built");
+        debug!("diffs {:#?}", image_cfg.rootfs().diff_ids());
+
+        let container = self
+            .create_container(
+                spec,
+                &container_id,
+                &snapshot_key,
+                &chain_id(image_cfg.rootfs().diff_ids()).expect("expected valid chain id"),
+                &container_spec.image_ref,
+            )
+            .await?;
+
+        self.start_container_task(&container).await?;
+
+        // TODO: Return all container metadata
 
         Ok(())
     }
@@ -127,8 +158,8 @@ impl ContainerManager {
             image = %image_ref,
         )
         .entered();
-        let ch = self.ensure_connected()?;
-        let img = self.fetch_image(image_ref).await?;
+        let ch = self.ensure_channel()?;
+        let img = self.fetch_local_image(image_ref).await?;
         if let Some(i) = img {
             return Ok(i);
         }
@@ -142,12 +173,12 @@ impl ContainerManager {
         };
 
         let source = OciRegistry {
-            reference: image_ref.to_string(),
+            reference: image_ref.clone(),
             resolver: Default::default(),
         };
 
         let destination = ImageStore {
-            name: image_ref.to_string(),
+            name: image_ref.clone(),
             platforms: vec![platform.clone()],
             unpacks: vec![UnpackConfiguration {
                 platform: Some(platform),
@@ -171,20 +202,20 @@ impl ContainerManager {
             .await
             .map_err(|e| ContainerManagerError::ImagePullFailed(image_ref.clone(), e))?;
 
-        match self.fetch_image(image_ref).await? {
+        match self.fetch_local_image(image_ref).await? {
             Some(i) => Ok(i),
             None => Err(ContainerManagerError::ImageMissingAfterSuccessfulPull {
-                image: image_ref.to_string(),
+                image: image_ref.clone(),
             }),
         }
     }
 
     #[instrument(skip(self), err)]
-    async fn fetch_image(
+    async fn fetch_local_image(
         &self,
         image_ref: &String,
     ) -> Result<Option<Image>, ContainerManagerError> {
-        let ch = self.ensure_connected()?;
+        let ch = self.ensure_channel()?;
         let mut images = ImagesClient::new(ch.clone());
 
         let resp = images
@@ -206,7 +237,104 @@ impl ContainerManager {
         }
     }
 
-    async fn get_image_config(&self, image: &Image) -> Result<Config, ContainerManagerError> {
+    #[instrument(skip(self, oci_spec), err)]
+    async fn create_container(
+        &self,
+        oci_spec: Spec,
+        container_id: &String,
+        snapshot_key: &String,
+        parent_snapshot_key: &String,
+        image_ref: &String,
+    ) -> Result<Container, ContainerManagerError> {
+        let ch = self.ensure_channel()?;
+
+        let mut snapshots = SnapshotsClient::new(ch.clone());
+
+        snapshots
+            .prepare(with_namespace!(
+                PrepareSnapshotRequest {
+                    snapshotter: SNAPSHOTTER.to_string(),
+                    key: snapshot_key.clone(),
+                    parent: parent_snapshot_key.clone(),
+                    ..Default::default()
+                },
+                CONTAINERD_NAMESPACE
+            ))
+            .await
+            .map_err(|e| ContainerManagerError::ContainerCreationFailed(e, container_id.clone()))?;
+
+        let container = Container {
+            id: container_id.clone(),
+            image: image_ref.clone(),
+            runtime: Some(Runtime {
+                name: RUNTIME_NAME.to_string(),
+                options: None,
+            }),
+            snapshotter: SNAPSHOTTER.to_string(),
+            snapshot_key: snapshot_key.clone(),
+            spec: Some(Any {
+                type_url: CONTAINER_SPEC_TYPE_URL.to_string(),
+                value: serde_json::to_vec(&oci_spec).unwrap(),
+            }),
+            ..Default::default()
+        };
+
+        let ch = self.ensure_channel()?;
+        let mut containers = ContainersClient::new(ch.clone());
+        let resp = containers
+            .create(with_namespace!(
+                CreateContainerRequest {
+                    container: Some(container),
+                },
+                CONTAINERD_NAMESPACE
+            ))
+            .await
+            .map_err(|s| ContainerManagerError::ContainerCreationFailed(s, container_id.clone()))?;
+
+        Ok(resp.get_ref().container.clone().unwrap())
+    }
+
+    #[instrument(skip(self, container), err)]
+    async fn start_container_task(
+        &self,
+        container: &Container,
+    ) -> Result<(), ContainerManagerError> {
+        let ch = self.ensure_channel()?;
+
+        let mut tasks = TasksClient::new(ch);
+        tasks
+            .create(with_namespace!(
+                CreateTaskRequest {
+                    container_id: container.id.clone(),
+                    // rootfs: rootfs_mounts,
+                    // stdin: stdin.display().clone(),
+                    // stdout: stdout.display().clone(),
+                    // stderr: stderr.display().clone(),
+                    ..Default::default()
+                },
+                CONTAINERD_NAMESPACE
+            ))
+            .await
+            .map_err(|e| ContainerManagerError::ContainerStartFailed(e, container.id.clone()))?;
+
+        tasks
+            .start(with_namespace!(
+                StartRequest {
+                    container_id: container.id.clone(),
+                    ..Default::default()
+                },
+                CONTAINERD_NAMESPACE
+            ))
+            .await
+            .map_err(|e| ContainerManagerError::ContainerStartFailed(e, container.id.clone()))?;
+
+        Ok(())
+    }
+
+    async fn get_image_config(
+        &self,
+        image: &Image,
+    ) -> Result<ImageConfiguration, ContainerManagerError> {
         let _span = debug_span!("get image config", image = image.name).entered();
         let manifest = self.resolve_image_manifest(&image).await?;
 
@@ -215,12 +343,7 @@ impl ContainerManager {
             .read_content_to_blob(&config_desc.digest().to_string())
             .await?;
         let image_config = ImageConfiguration::from_reader(config_bytes.as_slice())?;
-        let cfg = image_config.config().as_ref();
-        if cfg.is_none() {
-            return Err(ContainerManagerError::ImageConfigMissing);
-        }
-
-        Ok(cfg.unwrap().clone())
+        Ok(image_config)
     }
 
     #[instrument(skip(self), err)]
@@ -272,7 +395,7 @@ impl ContainerManager {
     }
 
     async fn read_content_to_blob(&self, digest: &str) -> Result<Vec<u8>, ContainerManagerError> {
-        let ch = self.ensure_connected()?;
+        let ch = self.ensure_channel()?;
         let mut content = ContentClient::new(ch);
 
         let mut stream = content
@@ -303,6 +426,7 @@ impl ContainerManager {
 
     // TODO: should support overrides from ClusterSpec
     fn build_oci_spec(&self, netns_path: &str, image_cfg: Config) -> Result<Spec, OciSpecError> {
+        debug!("Building oci spec: {image_cfg:#?}");
         let entrypoint = image_cfg.entrypoint().clone().unwrap_or_default();
         let cmd = image_cfg.cmd().clone().unwrap_or_default();
 
@@ -374,4 +498,19 @@ fn normalize_arch(arch: &str) -> &str {
         "aarch64" => "arm64",
         other => other,
     }
+}
+
+fn chain_id(diff_ids: &[String]) -> Option<String> {
+    let mut iter = diff_ids.iter();
+
+    let first = iter.next()?.clone();
+    let mut current = first;
+
+    for diff_id in iter {
+        let input = format!("{current} {diff_id}");
+        let digest = sha256::digest(input);
+        current = format!("sha256:{digest}");
+    }
+
+    Some(current)
 }

@@ -178,11 +178,17 @@ impl Test {
             }
 
             for spec in node.spec.container_specs.clone() {
-                let container_name = spec.name().unwrap_or(spec.image_basename());
+                let resource_id = resource_id();
+                let container_name = format!(
+                    "{}-{}",
+                    spec.name().unwrap_or(spec.image_basename()),
+                    resource_id,
+                );
+                let snapshot_key = format!("kh-snap-{}", resource_id);
                 self.containerd
                     .run_container(
-                        self.id.clone(),
-                        container_id(self.id.clone(), node, container_name),
+                        container_id(self.id.clone(), node_id, container_name),
+                        snapshot_key,
                         spec,
                         &ns.unwrap().path,
                     )
@@ -202,7 +208,7 @@ impl Test {
         for node_id in self.cluster_spec.nodes.keys() {
             let _span = info_span!("setup_node", node_id = %node_id).entered();
             self.network
-                .setup_namespace(node_id.raw().clone())
+                .create_namespace(node_id.raw().clone())
                 .map_err(|e| TestSetupError::ClusterNetworkSetupFailed(e))?;
         }
 
@@ -234,11 +240,8 @@ async fn wait_for_ctrl_c() -> std::io::Result<()> {
     tokio::signal::ctrl_c().await
 }
 
-pub fn container_id(test_id: String, node: &Node, container_name: String) -> String {
-    format!(
-        "kh-{test_id}-{}-{container_name}-{}",
-        node.node_id, node.resource_id
-    )
+pub fn container_id(test_id: String, node_id: &NodeId, container_name: String) -> String {
+    format!("kh-{test_id}-{}-{container_name}", node_id,)
 }
 
 pub fn resource_id() -> String {

@@ -67,9 +67,9 @@ impl ClusterNetworkManager {
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
-    pub fn setup_namespace(&mut self, key: String) -> Result<(), ClusterNetworkError> {
+    pub fn create_namespace(&mut self, key: String) -> Result<(), ClusterNetworkError> {
         let namespace_name = format!("kh-{}", key);
-        let path = format!("/run/netns/{}", key);
+        let path = format!("/run/netns/{}", namespace_name);
 
         if Path::new(&path).exists() {
             info!("namespace already exists, tearing it down before recreating");

@@ -2,7 +2,9 @@ use anyhow::Result;
 use khaos::spec::common::postgres;
 use khaos::spec::{AZSpec, ClusterSpec, NodeSpec};
 use khaos::testing::Test;
+use std::time::Duration;
 use tokio;
+use tokio::time::sleep;
 use tracing::Level;
 
 #[tokio::main]
@@ -23,7 +25,10 @@ async fn main() -> Result<()> {
     let _az1 = s.add_az("az1", AZSpec::new().contains(&db1).contains(&db2));
 
     Test::new("patroni_stale_leader", s)
-        .run(async move |_ctx| panic!("test"))
+        .run(async move |_ctx| {
+            sleep(Duration::from_secs(1000)).await;
+            Ok(())
+        })
         .await?;
 
     Ok(())
