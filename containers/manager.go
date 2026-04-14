@@ -198,17 +198,8 @@ func (m *manager) prepareContainerIO(containerID string) (ContainerIO, io.Writer
 		return ContainerIO{}, nil, nil, fmt.Errorf("create io dir for %s: %w", containerID, err)
 	}
 
-	stdinPath := filepath.Join(root, "stdin")
 	stdoutPath := filepath.Join(root, "stdout")
 	stderrPath := filepath.Join(root, "stderr")
-
-	stdinFile, err := os.OpenFile(stdinPath, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0o644)
-	if err != nil {
-		return ContainerIO{}, nil, nil, fmt.Errorf("create stdin file for %s: %w", containerID, err)
-	}
-	if err := stdinFile.Close(); err != nil {
-		return ContainerIO{}, nil, nil, fmt.Errorf("close stdin file for %s: %w", containerID, err)
-	}
 
 	stdoutFile, err := os.OpenFile(stdoutPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -227,7 +218,6 @@ func (m *manager) prepareContainerIO(containerID string) (ContainerIO, io.Writer
 
 	return ContainerIO{
 		Dir:    root,
-		Stdin:  stdinPath,
 		Stdout: stdoutPath,
 		Stderr: stderrPath,
 	}, fileAppender{path: stdoutPath}, fileAppender{path: stderrPath}, nil

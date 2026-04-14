@@ -39,7 +39,6 @@ type RunningContainer struct {
 
 type ContainerIO struct {
 	Dir    string
-	Stdin  string
 	Stdout string
 	Stderr string
 }

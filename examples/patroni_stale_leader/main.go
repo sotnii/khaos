@@ -85,6 +85,6 @@ func main() {
 	})
 
 	if err != nil {
-		logger.Error("test run failed: %v", err)
+		logger.Error("test run failed", "err", err)
 	}
 }

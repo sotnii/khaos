@@ -197,9 +197,6 @@ func (r *Runtime) collectContainerArtifacts(nodeID spec.NodeID, ctr *containers.
 		return fmt.Errorf("create artifact dir for %s/%s: %w", nodeID, ctr.Name, err)
 	}
 
-	if err := copyFile(ctr.IO.Stdin, filepath.Join(dstDir, "stdin")); err != nil {
-		return fmt.Errorf("copy stdin for %s/%s: %w", nodeID, ctr.Name, err)
-	}
 	if err := copyFile(ctr.IO.Stdout, filepath.Join(dstDir, "stdout")); err != nil {
 		return fmt.Errorf("copy stdout for %s/%s: %w", nodeID, ctr.Name, err)
 	}
