@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -21,19 +22,12 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-type Logger interface {
-	Debug(msg string, args ...any)
-	Info(msg string, args ...any)
-	Warn(msg string, args ...any)
-	Error(msg string, args ...any)
-}
-
 type Config struct {
 	Socket      string
 	Namespace   string
 	Snapshotter string
 	WorkDir     string
-	Logger      Logger
+	Logger      *slog.Logger
 }
 
 type manager struct {
@@ -41,10 +35,13 @@ type manager struct {
 	namespace   string
 	snapshotter string
 	workDir     string
-	logger      Logger
+	logger      *slog.Logger
 }
 
 func NewManager(cfg Config) (Manager, error) {
+	if cfg.Logger != nil {
+		cfg.Logger.Debug("connecting to containerd", "socket", cfg.Socket, "namespace", cfg.Namespace, "snapshotter", cfg.Snapshotter)
+	}
 	client, err := containerd.New(
 		cfg.Socket,
 		containerd.WithDefaultNamespace(cfg.Namespace),
@@ -55,7 +52,7 @@ func NewManager(cfg Config) (Manager, error) {
 
 	logger := cfg.Logger
 	if logger == nil {
-		logger = nopLogger{}
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
 	return &manager{
@@ -69,8 +66,10 @@ func NewManager(cfg Config) (Manager, error) {
 
 func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*RunningContainer, error) {
 	ctx = namespaces.WithNamespace(ctx, m.namespace)
+	m.logger.Debug("run container requested", "container_id", req.ID, "node", req.NodeID, "service", req.Name, "image", req.ImageRef, "netns", req.NetNSPath)
 
 	if req.StartDelay > 0 {
+		m.logger.Debug("waiting before container start", "container_id", req.ID, "delay", req.StartDelay)
 		timer := time.NewTimer(req.StartDelay)
 		defer timer.Stop()
 		select {
@@ -84,11 +83,13 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 	if err != nil {
 		return nil, fmt.Errorf("pull image %s: %w", req.ImageRef, err)
 	}
+	m.logger.Debug("image ready", "container_id", req.ID, "image", image.Name())
 
 	bundleDir, mounts, err := m.prepareFiles(req.ID, req.Files)
 	if err != nil {
 		return nil, err
 	}
+	m.logger.Debug("prepared injected files", "container_id", req.ID, "bundle_dir", bundleDir, "mount_count", len(mounts))
 	containerIO, stdoutWriter, stderrWriter, err := m.prepareContainerIO(req.ID)
 	if err != nil {
 		_ = os.RemoveAll(bundleDir)
@@ -121,6 +122,7 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 		_ = os.RemoveAll(bundleDir)
 		return nil, fmt.Errorf("create container %s: %w", req.ID, err)
 	}
+	m.logger.Debug("container metadata created", "container_id", req.ID, "snapshot_key", snapshotKey)
 
 	task, err := container.NewTask(
 		ctx,
@@ -135,6 +137,7 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 		_ = os.RemoveAll(bundleDir)
 		return nil, fmt.Errorf("create task for %s: %w", req.ID, err)
 	}
+	m.logger.Debug("task created", "container_id", req.ID)
 
 	if err := task.Start(ctx); err != nil {
 		_, _ = task.Delete(ctx)
@@ -157,6 +160,7 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 
 func (m *manager) TeardownContainer(ctx context.Context, ctr *RunningContainer) error {
 	ctx = namespaces.WithNamespace(ctx, m.namespace)
+	m.logger.Debug("tearing down container", "container_id", ctr.ID, "service", ctr.Name, "node", ctr.NodeID)
 	container, err := m.client.LoadContainer(ctx, ctr.ID)
 	if err != nil {
 		if errdefs.IsNotFound(err) {
@@ -167,6 +171,7 @@ func (m *manager) TeardownContainer(ctx context.Context, ctr *RunningContainer) 
 
 	task, err := container.Task(ctx, nil)
 	if err == nil {
+		m.logger.Debug("killing task", "container_id", ctr.ID)
 		_ = task.Kill(ctx, syscall.SIGKILL)
 		_, _ = task.Delete(ctx, containerd.WithProcessKill)
 	}
@@ -188,6 +193,7 @@ func (m *manager) TeardownContainer(ctx context.Context, ctr *RunningContainer) 
 
 func (m *manager) prepareContainerIO(containerID string) (ContainerIO, io.Writer, io.Writer, error) {
 	root := filepath.Join(m.workDir, "logs", containerID)
+	m.logger.Debug("preparing container io", "container_id", containerID, "dir", root)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return ContainerIO{}, nil, nil, fmt.Errorf("create io dir for %s: %w", containerID, err)
 	}
@@ -229,6 +235,7 @@ func (m *manager) prepareContainerIO(containerID string) (ContainerIO, io.Writer
 
 func (m *manager) ExecInContainer(ctx context.Context, containerID string, argv []string) (*ExecResult, error) {
 	ctx = namespaces.WithNamespace(ctx, m.namespace)
+	m.logger.Debug("exec in container", "container_id", containerID, "argv", argv)
 
 	container, err := m.client.LoadContainer(ctx, containerID)
 	if err != nil {
@@ -267,6 +274,7 @@ func (m *manager) ExecInContainer(ctx context.Context, containerID string, argv 
 	if err != nil {
 		return nil, fmt.Errorf("create exec process in %s: %w", containerID, err)
 	}
+	m.logger.Debug("exec process created", "container_id", containerID, "exec_id", execID)
 
 	statusC, err := process.Wait(ctx)
 	if err != nil {
@@ -276,9 +284,11 @@ func (m *manager) ExecInContainer(ctx context.Context, containerID string, argv 
 	if err := process.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start exec process %s: %w", execID, err)
 	}
+	m.logger.Debug("exec process started", "container_id", containerID, "exec_id", execID)
 
 	select {
 	case <-ctx.Done():
+		m.logger.Warn("exec canceled", "container_id", containerID, "exec_id", execID)
 		_ = process.Kill(context.Background(), syscall.SIGKILL)
 		_, _ = process.Delete(context.Background(), containerd.WithProcessKill)
 		return nil, ctx.Err()
@@ -290,6 +300,7 @@ func (m *manager) ExecInContainer(ctx context.Context, containerID string, argv 
 		if waitErr != nil {
 			return nil, fmt.Errorf("exec process %s failed: %w", execID, waitErr)
 		}
+		m.logger.Debug("exec process completed", "container_id", containerID, "exec_id", execID, "exit_code", exitCode, "stdout_len", len(stdout.String()), "stderr_len", len(stderr.String()))
 		return &ExecResult{
 			ExitCode: exitCode,
 			Stdout:   stdout.String(),
@@ -300,6 +311,7 @@ func (m *manager) ExecInContainer(ctx context.Context, containerID string, argv 
 
 func (m *manager) ObserveEvents(ctx context.Context) (<-chan Event, <-chan error, error) {
 	ctx = namespaces.WithNamespace(ctx, m.namespace)
+	m.logger.Debug("subscribing to containerd events")
 	stream, errs := m.client.Subscribe(ctx)
 	out := make(chan Event, 16)
 	errOut := make(chan error, 1)
@@ -316,6 +328,7 @@ func (m *manager) ObserveEvents(ctx context.Context) (<-chan Event, <-chan error
 					return
 				}
 				if err != nil {
+					m.logger.Warn("containerd event stream error", "error", err)
 					errOut <- err
 				}
 			case envelope, ok := <-stream:
@@ -325,6 +338,7 @@ func (m *manager) ObserveEvents(ctx context.Context) (<-chan Event, <-chan error
 				if envelope.Topic != "/tasks/exit" || envelope.Event == nil {
 					continue
 				}
+				m.logger.Debug("received task exit envelope", "topic", envelope.Topic, "namespace", envelope.Namespace)
 				payload, err := typeurl.UnmarshalAny(envelope.Event)
 				if err != nil {
 					errOut <- err
@@ -352,6 +366,7 @@ func (m *manager) Close() error {
 
 func (m *manager) prepareFiles(containerID string, files map[string]string) (string, []specs.Mount, error) {
 	root := filepath.Join(m.workDir, "mounts", containerID)
+	m.logger.Debug("preparing injected files", "container_id", containerID, "root", root, "file_count", len(files))
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", nil, fmt.Errorf("create mount root for %s: %w", containerID, err)
 	}
@@ -359,6 +374,7 @@ func (m *manager) prepareFiles(containerID string, files map[string]string) (str
 	mounts := make([]specs.Mount, 0, len(files))
 	for target, content := range files {
 		source := filepath.Join(root, sanitizeTarget(target))
+		m.logger.Debug("writing injected file", "container_id", containerID, "target", target, "source", source, "size", len(content))
 		if err := os.MkdirAll(filepath.Dir(source), 0o755); err != nil {
 			return "", nil, fmt.Errorf("create host dir for %s: %w", target, err)
 		}
@@ -395,13 +411,6 @@ func envSlice(env map[string]string) []string {
 	}
 	return out
 }
-
-type nopLogger struct{}
-
-func (nopLogger) Debug(string, ...any) {}
-func (nopLogger) Info(string, ...any)  {}
-func (nopLogger) Warn(string, ...any)  {}
-func (nopLogger) Error(string, ...any) {}
 
 type fileAppender struct {
 	path string

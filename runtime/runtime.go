@@ -34,7 +34,7 @@ func NewRuntime(name string, cluster *spec.ClusterSpec, logger Logger) (*Runtime
 		return nil, fmt.Errorf("create work dir: %w", err)
 	}
 
-	netManager, err := network.NewManager("pkst", network.ExecCommander{})
+	netManager, err := network.NewManager("pkst", network.ExecCommander{}, logger.With("component", "network"))
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +66,7 @@ func NewRuntime(name string, cluster *spec.ClusterSpec, logger Logger) (*Runtime
 
 func (r *Runtime) Run(ctx context.Context, fn func(*Context) error) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
+	r.logger.Info("runtime starting", "nodes", len(r.cluster.Nodes), "artifacts_dir", r.artifactsDir, "work_dir", r.workDir)
 	defer cancel()
 	defer func() {
 		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -78,6 +79,7 @@ func (r *Runtime) Run(ctx context.Context, fn func(*Context) error) (runErr erro
 			runErr = errors.Join(runErr, teardownErr)
 		}
 		_ = r.containers.Close()
+		r.logger.Info("runtime finished", "error", runErr)
 	}()
 
 	if err := r.prepare(ctx); err != nil {
@@ -113,6 +115,7 @@ func (r *Runtime) runTest(ctx context.Context, cancel context.CancelFunc, handle
 
 	testErr := make(chan error, 1)
 	go func() {
+		r.logger.Info("starting test")
 		testErr <- fn(handle)
 	}()
 
@@ -126,9 +129,11 @@ func (r *Runtime) runTest(ctx context.Context, cancel context.CancelFunc, handle
 		select {
 		case err := <-testErr:
 			testFinished = true
+			r.logger.Info("user test callback finished", "error", err)
 			cancel()
 			return err
 		case sig := <-signals:
+			r.logger.Warn("received termination signal", "signal", sig.String())
 			cancel()
 			return fmt.Errorf("%w: %s", ErrTestCancelled, sig.String())
 		case event, ok := <-events:
@@ -145,6 +150,7 @@ func (r *Runtime) runTest(ctx context.Context, cancel context.CancelFunc, handle
 			}
 		case <-ctx.Done():
 			if testFinished || errors.Is(ctx.Err(), context.Canceled) {
+				r.logger.Debug("runtime context canceled after normal completion")
 				return nil
 			}
 			return ctx.Err()
@@ -157,22 +163,27 @@ func (r *Runtime) teardown(ctx context.Context) error {
 	var errs []error
 
 	for _, node := range r.state.drainNodes() {
+		r.logger.Debug("tearing down node", "node", node.spec.ID)
 		for _, containerState := range node.containers {
 			if containerState.running != nil {
 				if err := r.collectContainerArtifacts(node.spec.ID, containerState.running); err != nil {
+					r.logger.Error("artifact collection failed", "node", node.spec.ID, "service", containerState.running.Name, "error", err)
 					errs = append(errs, err)
 				}
 				if err := r.containers.TeardownContainer(ctx, containerState.running); err != nil {
+					r.logger.Error("container teardown failed", "node", node.spec.ID, "container_id", containerState.running.ID, "error", err)
 					errs = append(errs, err)
 				}
 			}
 		}
 		if err := r.network.TeardownNamespace(ctx, node.namespace); err != nil {
+			r.logger.Error("namespace teardown failed", "node", node.spec.ID, "namespace", node.namespace.Name, "error", err)
 			errs = append(errs, err)
 		}
 	}
 
 	if err := r.network.TeardownNamespace(ctx, r.state.AgentNamespace()); err != nil {
+		r.logger.Error("agent namespace teardown failed", "error", err)
 		errs = append(errs, err)
 	}
 
@@ -181,6 +192,7 @@ func (r *Runtime) teardown(ctx context.Context) error {
 
 func (r *Runtime) collectContainerArtifacts(nodeID spec.NodeID, ctr *containers.RunningContainer) error {
 	dstDir := filepath.Join(r.artifactsDir, "logs", string(nodeID), ctr.Name)
+	r.logger.Debug("collecting container artifacts", "node", nodeID, "service", ctr.Name, "src", ctr.IO.Dir, "dst", dstDir)
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		return fmt.Errorf("create artifact dir for %s/%s: %w", nodeID, ctr.Name, err)
 	}
@@ -195,10 +207,12 @@ func (r *Runtime) collectContainerArtifacts(nodeID spec.NodeID, ctr *containers.
 		return fmt.Errorf("copy stderr for %s/%s: %w", nodeID, ctr.Name, err)
 	}
 
+	r.logger.Info("container artifacts collected", "node", nodeID, "service", ctr.Name, "dst", dstDir)
 	return nil
 }
 
 func (r *Runtime) provisionNetwork(ctx context.Context) error {
+	r.logger.Info("provisioning network")
 	if err := r.network.SetupBridge(ctx); err != nil {
 		return err
 	}
@@ -210,12 +224,14 @@ func (r *Runtime) provisionNetwork(ctx context.Context) error {
 	if err := r.network.SetupNamespace(ctx, agentNS); err != nil {
 		return err
 	}
+	r.logger.Debug("agent namespace ready", "namespace", agentNS.Name, "path", agentNS.Path)
 
 	r.state.WithWrite(func() {
 		r.state.agentNamespace = agentNS
 	})
 
 	for _, node := range r.state.Nodes() {
+		r.logger.Debug("provisioning node namespace", "node", node.spec.ID, "resource_id", node.resourceID)
 		ns, err := r.network.CreateNamespace(ctx, node.resourceID, fmt.Sprintf("node-%s", node.resourceID))
 		if err != nil {
 			return err
@@ -238,6 +254,7 @@ func (r *Runtime) provisionContainers(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	r.logger.Debug("hosts file generated", "content", hostsFile)
 
 	var (
 		wg      sync.WaitGroup
@@ -266,9 +283,11 @@ func (r *Runtime) provisionContainers(ctx context.Context) error {
 					Readiness:   containerSpec.ReadinessProbe,
 					NamespaceIP: node.namespace.AllocatedIP.String(),
 				}
+				r.logger.Debug("launching container", "node", node.spec.ID, "service", containerSpec.Name, "container_id", request.ID, "image", request.ImageRef, "netns", request.NetNSPath, "start_delay", request.StartDelay)
 
 				running, err := r.containers.RunContainer(ctx, request)
 				if err != nil {
+					r.logger.Error("container launch failed", "node", node.spec.ID, "service", containerSpec.Name, "container_id", request.ID, "error", err)
 					errMu.Lock()
 					runErrs = append(runErrs, err)
 					errMu.Unlock()
@@ -296,6 +315,7 @@ func (r *Runtime) buildHostsFile() (string, error) {
 		if node.namespace == nil || node.namespace.AllocatedIP == nil {
 			return "", fmt.Errorf("node %s network namespace not ready", node.spec.ID)
 		}
+		r.logger.Debug("adding hosts entry", "node", node.spec.ID, "ip", node.namespace.AllocatedIP.String())
 		lines = append(lines, fmt.Sprintf("%s %s", node.namespace.AllocatedIP.String(), node.spec.ID))
 	}
 	return joinLines(lines), nil

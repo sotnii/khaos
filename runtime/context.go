@@ -21,7 +21,7 @@ type Context struct {
 
 func newContext(handle *Handle) *Context {
 	return &Context{
-		exec: api.NewExec(handle.ctx, handle.state, handle.manager),
+		exec: api.NewExec(handle.ctx, handle.state, handle.manager, handle.logger.With("component", "exec")),
 	}
 }
 

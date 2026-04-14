@@ -21,10 +21,6 @@ const (
 	colorBold   = "\033[1m"
 )
 
-type slogLogger struct {
-	logger *slog.Logger
-}
-
 type colorHandler struct {
 	opts   slog.HandlerOptions
 	writer io.Writer
@@ -49,24 +45,11 @@ func NewLogger(w io.Writer, level slog.Leveler) *slog.Logger {
 }
 
 func newDefaultLogger() Logger {
-	return &slogLogger{
-		logger: NewLogger(os.Stdout, slog.LevelInfo),
-	}
+	return NewLogger(os.Stdout, slog.LevelInfo)
 }
 
 func NewDiscardLogger() Logger {
-	return &slogLogger{
-		logger: slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{})),
-	}
-}
-
-func (l *slogLogger) Debug(msg string, args ...any) { l.logger.Debug(msg, args...) }
-func (l *slogLogger) Info(msg string, args ...any)  { l.logger.Info(msg, args...) }
-func (l *slogLogger) Warn(msg string, args ...any)  { l.logger.Warn(msg, args...) }
-func (l *slogLogger) Error(msg string, args ...any) { l.logger.Error(msg, args...) }
-
-func (l *slogLogger) With(args ...any) Logger {
-	return &slogLogger{logger: l.logger.With(args...)}
+	return slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
 }
 
 func (h *colorHandler) Enabled(_ context.Context, level slog.Level) bool {
