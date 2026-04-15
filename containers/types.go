@@ -57,7 +57,7 @@ type Event struct {
 
 type Manager interface {
 	RunContainer(ctx context.Context, req LaunchRequest) (*RunningContainer, error)
-	TeardownContainer(ctx context.Context, ctr *RunningContainer) error
+	TeardownContainer(ctx context.Context, ctr RunningContainer) error
 	ExecInContainer(ctx context.Context, containerID string, argv []string) (*ExecResult, error)
 	ObserveEvents(ctx context.Context) (<-chan Event, <-chan error, error)
 	Close() error

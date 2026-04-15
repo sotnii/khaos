@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/sotnii/pakostii/logging"
 	"github.com/sotnii/pakostii/runtime"
 	"github.com/sotnii/pakostii/spec"
 )
@@ -16,7 +17,7 @@ import (
 var patroniConfig string
 
 func main() {
-	logger := runtime.NewLogger(os.Stdout, slog.LevelDebug)
+	logger := logging.NewLogger(os.Stdout, slog.LevelDebug)
 
 	cluster := spec.NewCluster("patroni_stale_leader")
 	etcdHosts := []spec.NodeID{"etcd1", "etcd2", "etcd3"}

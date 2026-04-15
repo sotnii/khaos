@@ -4,31 +4,35 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/sotnii/pakostii/containers"
+	"github.com/sotnii/pakostii/logging"
 	"github.com/sotnii/pakostii/network"
+	"github.com/sotnii/pakostii/runtime/provision"
+	"github.com/sotnii/pakostii/runtime/state"
+	"github.com/sotnii/pakostii/runtime/util"
 	"github.com/sotnii/pakostii/spec"
 )
 
 type Runtime struct {
-	name         string
-	cluster      *spec.ClusterSpec
-	logger       Logger
-	state        *clusterState
-	network      *network.Manager
-	containers   containers.Manager
-	workDir      string
-	artifactsDir string
+	name                 string
+	cluster              *spec.ClusterSpec
+	logger               logging.Logger
+	state                *state.ClusterState
+	network              *network.Manager
+	containers           containers.Manager
+	networkProvisioner   *provision.NetworkProvisioner
+	containerProvisioner *provision.ContainerProvisioner
+	workDir              string
+	artifactsDir         string
 }
 
-func NewRuntime(name string, cluster *spec.ClusterSpec, logger Logger) (*Runtime, error) {
+func NewRuntime(name string, cluster *spec.ClusterSpec, logger logging.Logger) (*Runtime, error) {
 	workDir := filepath.Join(os.TempDir(), "pakostii")
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create work dir: %w", err)
@@ -50,17 +54,19 @@ func NewRuntime(name string, cluster *spec.ClusterSpec, logger Logger) (*Runtime
 		return nil, err
 	}
 
-	state := newClusterState(cluster)
+	cs := state.NewClusterState(cluster)
 
 	return &Runtime{
-		name:         name,
-		cluster:      cluster,
-		logger:       logger.With("test", name),
-		state:        state,
-		network:      netManager,
-		containers:   containerManager,
-		workDir:      workDir,
-		artifactsDir: filepath.Join(".pakostii", fmt.Sprintf("%s-%s", name, state.TestID())),
+		name:                 name,
+		cluster:              cluster,
+		logger:               logger.With("test", name),
+		state:                cs,
+		network:              netManager,
+		containers:           containerManager,
+		networkProvisioner:   provision.NewNetworkProvisioner(netManager, logger.With("test", name)),
+		containerProvisioner: provision.NewContainerProvisioner(containerManager, logger.With("test", name)),
+		workDir:              workDir,
+		artifactsDir:         filepath.Join(".pakostii", fmt.Sprintf("%s-%s", name, cs.TestID())),
 	}, nil
 }
 
@@ -98,10 +104,10 @@ func (r *Runtime) Run(ctx context.Context, fn func(*Context) error) (runErr erro
 
 func (r *Runtime) prepare(ctx context.Context) error {
 	r.logger.Info("preparing runtime", "test_id", r.state.TestID())
-	if err := r.provisionNetwork(ctx); err != nil {
+	if err := r.networkProvisioner.Provision(ctx, r.state); err != nil {
 		return err
 	}
-	if err := r.provisionContainers(ctx); err != nil {
+	if err := r.containerProvisioner.Provision(ctx, r.state); err != nil {
 		return err
 	}
 	return nil
@@ -162,22 +168,26 @@ func (r *Runtime) teardown(ctx context.Context) error {
 	r.logger.Info("tearing down runtime")
 	var errs []error
 
-	for _, node := range r.state.drainNodes() {
-		r.logger.Debug("tearing down node", "node", node.spec.ID)
-		for _, containerState := range node.containers {
-			if containerState.running != nil {
-				if err := r.collectContainerArtifacts(node.spec.ID, containerState.running); err != nil {
-					r.logger.Error("artifact collection failed", "node", node.spec.ID, "service", containerState.running.Name, "error", err)
-					errs = append(errs, err)
-				}
-				if err := r.containers.TeardownContainer(ctx, containerState.running); err != nil {
-					r.logger.Error("container teardown failed", "node", node.spec.ID, "container_id", containerState.running.ID, "error", err)
-					errs = append(errs, err)
-				}
+	for _, node := range r.state.DrainNodes() {
+		nodeSpec := node.Spec()
+		nodeNS := node.Namespace()
+		r.logger.Debug("tearing down node", "node", nodeSpec.ID)
+		for _, container := range node.Containers() {
+			if err := r.collectContainerArtifacts(nodeSpec.ID, container); err != nil {
+				r.logger.Error("artifact collection failed", "node", nodeSpec.ID, "service", container.Name, "error", err)
+				errs = append(errs, err)
+			}
+			if err := r.containers.TeardownContainer(ctx, container); err != nil {
+				r.logger.Error("container teardown failed", "node", nodeSpec.ID, "container_id", container.ID, "error", err)
+				errs = append(errs, err)
 			}
 		}
-		if err := r.network.TeardownNamespace(ctx, node.namespace); err != nil {
-			r.logger.Error("namespace teardown failed", "node", node.spec.ID, "namespace", node.namespace.Name, "error", err)
+		if err := r.network.TeardownNamespace(ctx, nodeNS); err != nil {
+			namespaceName := "<nil>"
+			if nodeNS != nil {
+				namespaceName = nodeNS.Name
+			}
+			r.logger.Error("namespace teardown failed", "node", nodeSpec.ID, "namespace", namespaceName, "error", err)
 			errs = append(errs, err)
 		}
 	}
@@ -190,176 +200,20 @@ func (r *Runtime) teardown(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (r *Runtime) collectContainerArtifacts(nodeID spec.NodeID, ctr *containers.RunningContainer) error {
+func (r *Runtime) collectContainerArtifacts(nodeID spec.NodeID, ctr containers.RunningContainer) error {
 	dstDir := filepath.Join(r.artifactsDir, "logs", string(nodeID), ctr.Name)
 	r.logger.Debug("collecting container artifacts", "node", nodeID, "service", ctr.Name, "src", ctr.IO.Dir, "dst", dstDir)
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		return fmt.Errorf("create artifact dir for %s/%s: %w", nodeID, ctr.Name, err)
 	}
 
-	if err := copyFile(ctr.IO.Stdout, filepath.Join(dstDir, "stdout")); err != nil {
+	if err := util.CopyFile(ctr.IO.Stdout, filepath.Join(dstDir, "stdout")); err != nil {
 		return fmt.Errorf("copy stdout for %s/%s: %w", nodeID, ctr.Name, err)
 	}
-	if err := copyFile(ctr.IO.Stderr, filepath.Join(dstDir, "stderr")); err != nil {
+	if err := util.CopyFile(ctr.IO.Stderr, filepath.Join(dstDir, "stderr")); err != nil {
 		return fmt.Errorf("copy stderr for %s/%s: %w", nodeID, ctr.Name, err)
 	}
 
 	r.logger.Info("container artifacts collected", "node", nodeID, "service", ctr.Name, "dst", dstDir)
 	return nil
-}
-
-func (r *Runtime) provisionNetwork(ctx context.Context) error {
-	r.logger.Info("provisioning network")
-	if err := r.network.SetupBridge(ctx); err != nil {
-		return err
-	}
-
-	agentNS, err := r.network.CreateNamespace(ctx, newResourceID(), "agent")
-	if err != nil {
-		return err
-	}
-	if err := r.network.SetupNamespace(ctx, agentNS); err != nil {
-		return err
-	}
-	r.logger.Debug("agent namespace ready", "namespace", agentNS.Name, "path", agentNS.Path)
-
-	r.state.WithWrite(func() {
-		r.state.agentNamespace = agentNS
-	})
-
-	for _, node := range r.state.Nodes() {
-		r.logger.Debug("provisioning node namespace", "node", node.spec.ID, "resource_id", node.resourceID)
-		ns, err := r.network.CreateNamespace(ctx, node.resourceID, fmt.Sprintf("node-%s", node.resourceID))
-		if err != nil {
-			return err
-		}
-		if err := r.network.SetupNamespace(ctx, ns); err != nil {
-			return err
-		}
-
-		current := node
-		r.state.WithWrite(func() {
-			current.namespace = ns
-		})
-	}
-
-	return nil
-}
-
-func (r *Runtime) provisionContainers(ctx context.Context) error {
-	hostsFile, err := r.buildHostsFile()
-	if err != nil {
-		return err
-	}
-	r.logger.Debug("hosts file generated", "content", hostsFile)
-
-	var (
-		wg      sync.WaitGroup
-		errMu   sync.Mutex
-		runErrs []error
-	)
-
-	for _, node := range r.state.Nodes() {
-		for _, containerSpec := range node.spec.Containers {
-			node := node
-			containerSpec := containerSpec
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-
-				request := containers.LaunchRequest{
-					ID:          fmt.Sprintf("pkst-%s-%s-%s-%s", r.state.TestID(), node.spec.ID, containerSpec.Name, newResourceID()),
-					Name:        containerSpec.Name,
-					NodeID:      string(node.spec.ID),
-					ImageRef:    containerSpec.ImageRef,
-					NetNSPath:   node.namespace.Path,
-					Hostname:    string(node.spec.ID),
-					Env:         copyMap(containerSpec.Env),
-					Files:       mergeMaps(containerSpec.Files, map[string]string{"/etc/hosts": hostsFile}),
-					StartDelay:  containerSpec.StartDelay,
-					Readiness:   containerSpec.ReadinessProbe,
-					NamespaceIP: node.namespace.AllocatedIP.String(),
-				}
-				r.logger.Debug("launching container", "node", node.spec.ID, "service", containerSpec.Name, "container_id", request.ID, "image", request.ImageRef, "netns", request.NetNSPath, "start_delay", request.StartDelay)
-
-				running, err := r.containers.RunContainer(ctx, request)
-				if err != nil {
-					r.logger.Error("container launch failed", "node", node.spec.ID, "service", containerSpec.Name, "container_id", request.ID, "error", err)
-					errMu.Lock()
-					runErrs = append(runErrs, err)
-					errMu.Unlock()
-					return
-				}
-
-				r.state.WithWrite(func() {
-					node.containers[running.ID] = &containerState{running: running}
-				})
-				r.logger.Info("container running", "node", node.spec.ID, "container_id", running.ID, "name", running.Name)
-			}()
-		}
-	}
-
-	wg.Wait()
-	return errors.Join(runErrs...)
-}
-
-func (r *Runtime) buildHostsFile() (string, error) {
-	lines := []string{
-		"127.0.0.1 localhost",
-		"::1 localhost ip6-localhost ip6-loopback",
-	}
-	for _, node := range r.state.Nodes() {
-		if node.namespace == nil || node.namespace.AllocatedIP == nil {
-			return "", fmt.Errorf("node %s network namespace not ready", node.spec.ID)
-		}
-		r.logger.Debug("adding hosts entry", "node", node.spec.ID, "ip", node.namespace.AllocatedIP.String())
-		lines = append(lines, fmt.Sprintf("%s %s", node.namespace.AllocatedIP.String(), node.spec.ID))
-	}
-	return joinLines(lines), nil
-}
-
-func copyMap(src map[string]string) map[string]string {
-	out := make(map[string]string, len(src))
-	for k, v := range src {
-		out[k] = v
-	}
-	return out
-}
-
-func mergeMaps(a, b map[string]string) map[string]string {
-	out := copyMap(a)
-	for k, v := range b {
-		out[k] = v
-	}
-	return out
-}
-
-func joinLines(lines []string) string {
-	result := ""
-	for i, line := range lines {
-		if i > 0 {
-			result += "\n"
-		}
-		result += line
-	}
-	return result
-}
-
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Sync()
 }

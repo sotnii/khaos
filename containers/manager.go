@@ -18,8 +18,8 @@ import (
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/oci"
 	"github.com/containerd/errdefs"
-	typeurl "github.com/containerd/typeurl/v2"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/containerd/typeurl/v2"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 type Config struct {
@@ -158,7 +158,7 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 	}, nil
 }
 
-func (m *manager) TeardownContainer(ctx context.Context, ctr *RunningContainer) error {
+func (m *manager) TeardownContainer(ctx context.Context, ctr RunningContainer) error {
 	ctx = namespaces.WithNamespace(ctx, m.namespace)
 	m.logger.Debug("tearing down container", "container_id", ctr.ID, "service", ctr.Name, "node", ctr.NodeID)
 	container, err := m.client.LoadContainer(ctx, ctr.ID)
@@ -235,31 +235,31 @@ func (m *manager) ExecInContainer(ctx context.Context, containerID string, argv 
 	if err != nil {
 		return nil, fmt.Errorf("load task for %s: %w", containerID, err)
 	}
+	taskSpec, err := task.Spec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load task spec for %s: %w", containerID, err)
+	}
+	if taskSpec == nil || taskSpec.Process == nil {
+		return nil, fmt.Errorf("task spec missing process for %s", containerID)
+	}
 
 	execID := "exec-" + filepath.Base(filepath.Clean(fmt.Sprintf("%d-%s", time.Now().UnixNano(), containerID)))
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	processSpec := &specs.Process{
-		Args:     argv,
-		Cwd:      "/",
-		Terminal: false,
+	processSpec := *taskSpec.Process
+	processSpec.Args = argv
+	processSpec.Terminal = false
+	processSpec.ConsoleSize = nil
+	if processSpec.Cwd == "" {
+		processSpec.Cwd = "/"
 	}
-
-	ioDir := filepath.Join(m.workDir, "exec", execID)
-	if err := os.MkdirAll(ioDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create exec io dir: %w", err)
-	}
-	defer os.RemoveAll(ioDir)
 
 	process, err := task.Exec(
 		ctx,
 		execID,
-		processSpec,
-		cio.NewCreator(
-			cio.WithStreams(nil, &stdout, &stderr),
-			cio.WithFIFODir(ioDir),
-		),
+		&processSpec,
+		cio.NewCreator(cio.WithStreams(nil, &stdout, &stderr)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create exec process in %s: %w", containerID, err)

@@ -1,4 +1,4 @@
-package runtime
+package logging
 
 import (
 	"context"
@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 )
+
+type Logger = *slog.Logger
 
 const (
 	colorReset  = "\033[0m"
@@ -44,7 +46,7 @@ func NewLogger(w io.Writer, level slog.Leveler) *slog.Logger {
 	})
 }
 
-func newDefaultLogger() Logger {
+func NewDefaultLogger() Logger {
 	return NewLogger(os.Stdout, slog.LevelInfo)
 }
 

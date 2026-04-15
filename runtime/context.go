@@ -2,17 +2,18 @@ package runtime
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/sotnii/pakostii/containers"
+	"github.com/sotnii/pakostii/logging"
 	"github.com/sotnii/pakostii/runtime/api"
+	"github.com/sotnii/pakostii/runtime/state"
 )
 
 type Handle struct {
 	ctx     context.Context
-	state   *clusterState
+	state   *state.ClusterState
 	manager containers.Manager
-	logger  Logger
+	logger  logging.Logger
 }
 
 type Context struct {
@@ -27,12 +28,4 @@ func newContext(handle *Handle) *Context {
 
 func (c *Context) Exec() *api.Exec {
 	return c.exec
-}
-
-func (h *Handle) mustFindContainer(nodeID, containerName string) (*containers.RunningContainer, error) {
-	container := h.state.FindContainer(nodeID, containerName)
-	if container == nil {
-		return nil, fmt.Errorf("container %q on node %q not found", containerName, nodeID)
-	}
-	return container, nil
 }

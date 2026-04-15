@@ -3,14 +3,13 @@ package runtime
 import (
 	"log/slog"
 
+	"github.com/sotnii/pakostii/logging"
 	"github.com/sotnii/pakostii/spec"
 )
 
 type ClusterSpec = spec.ClusterSpec
 
-type Logger = *slog.Logger
-
-type RuntimeFactory func(name string, cluster *spec.ClusterSpec, logger Logger) (*Runtime, error)
+type RuntimeFactory func(name string, cluster *spec.ClusterSpec, logger logging.Logger) (*Runtime, error)
 
 type TestOption func(*Test)
 

@@ -1,11 +1,15 @@
 package runtime
 
-import "context"
+import (
+	"context"
+
+	"github.com/sotnii/pakostii/logging"
+)
 
 type Test struct {
 	name        string
 	clusterSpec *ClusterSpec
-	logger      Logger
+	logger      logging.Logger
 	runtime     RuntimeFactory
 }
 
@@ -13,7 +17,7 @@ func NewTest(name string, cluster *ClusterSpec, opts ...TestOption) *Test {
 	t := &Test{
 		name:        name,
 		clusterSpec: cluster,
-		logger:      newDefaultLogger(),
+		logger:      logging.NewDefaultLogger(),
 		runtime:     NewRuntime,
 	}
 	for _, opt := range opts {
