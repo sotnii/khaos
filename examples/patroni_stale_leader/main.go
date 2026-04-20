@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,10 @@ import (
 
 //go:embed patroni.yml
 var patroniConfig string
+
+type PatroniLeaderResp struct {
+	Role string `json:"role"`
+}
 
 func main() {
 	logger := logging.NewLogger(os.Stdout, slog.LevelDebug)
@@ -65,23 +70,18 @@ func main() {
 	)
 
 	err := test.Run(context.Background(), func(ctx *runtime.Context) error {
-		time.Sleep(5 * time.Second)
-
-		first, err := ctx.Exec().InContainer("db1", "patroni", "curl", "http://0.0.0.0:8008/leader")
+		resp, err := ctx.Http().Get("http://db1:8008/leader", time.Second*5)
 		if err != nil {
-			fmt.Printf("exec error: %v\n", err)
-		} else {
-			fmt.Printf("db1 leader: %+v\n", first)
+			return err
 		}
-
-		second, err := ctx.Exec().InContainer("db2", "patroni", "curl", "http://0.0.0.0:8008/leader")
+		var p PatroniLeaderResp
+		err = json.Unmarshal(resp.Body, &p)
 		if err != nil {
-			fmt.Printf("exec error: %v\n", err)
-		} else {
-			fmt.Printf("db2 leader: %+v\n", second)
+			return err
 		}
-
-		time.Sleep(100 * time.Second)
+		if p.Role != "primary" {
+			return fmt.Errorf("expected db1 to be cluster leader after cluster startup, instead got %v", p.Role)
+		}
 		return nil
 	})
 

@@ -13,6 +13,7 @@ import (
 	"github.com/sotnii/pakostii/containers"
 	"github.com/sotnii/pakostii/logging"
 	"github.com/sotnii/pakostii/network"
+	"github.com/sotnii/pakostii/runtime/agent"
 	"github.com/sotnii/pakostii/runtime/provision"
 	"github.com/sotnii/pakostii/runtime/state"
 	"github.com/sotnii/pakostii/runtime/util"
@@ -92,11 +93,22 @@ func (r *Runtime) Run(ctx context.Context, fn func(*Context) error) (runErr erro
 		return err
 	}
 
+	agentNs := r.state.AgentNamespace()
+	if agentNs == nil {
+		return errors.New("agent namespace not initialized, could not proceed the test")
+	}
+	httpAgent, err := agent.NewClusterHttpAgent(agentNs.Path, r.state.Nodes())
+	if err != nil {
+		return err
+	}
+	defer httpAgent.Close()
+
 	handle := &Handle{
-		ctx:     ctx,
-		state:   r.state,
-		manager: r.containers,
-		logger:  r.logger,
+		ctx:       ctx,
+		state:     r.state,
+		manager:   r.containers,
+		logger:    r.logger,
+		httpAgent: httpAgent,
 	}
 
 	return r.runTest(ctx, cancel, newContext(handle), fn)
@@ -126,7 +138,7 @@ func (r *Runtime) runTest(ctx context.Context, cancel context.CancelFunc, handle
 	}()
 
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
 
 	var testFinished bool

@@ -3,27 +3,27 @@ package api
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/sotnii/pakostii/containers"
+	"github.com/sotnii/pakostii/logging"
 )
 
-type clusterStateView interface {
+type execStateView interface {
 	FindContainer(nodeID, containerName string) *containers.RunningContainer
 }
 
 type Exec struct {
 	ctx     context.Context
-	state   clusterStateView
+	state   execStateView
 	manager containers.Manager
-	logger  *slog.Logger
+	logger  logging.Logger
 }
 
-func NewExec(ctx context.Context, state clusterStateView, manager containers.Manager, logger *slog.Logger) *Exec {
+func NewExec(ctx context.Context, state execStateView, manager containers.Manager, logger logging.Logger) *Exec {
 	return &Exec{ctx: ctx, state: state, manager: manager, logger: logger}
 }
 
-func (e *Exec) InContainer(nodeID, containerName string, argv ...string) (*containers.ExecResult, error) {
+func (e *Exec) ContainerCmd(nodeID, containerName string, argv ...string) (*containers.ExecResult, error) {
 	e.logger.Debug("exec requested", "node", nodeID, "service", containerName, "argv", argv)
 	container := e.state.FindContainer(nodeID, containerName)
 	if container == nil {

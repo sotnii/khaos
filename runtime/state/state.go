@@ -78,6 +78,27 @@ type ClusterState struct {
 	agentNamespace *network.Namespace
 }
 
+func (s *ClusterState) GetNode(nodeID string) *NodeState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, n := range s.nodes {
+		if string(n.spec.ID) == nodeID {
+			return n
+		}
+	}
+	return nil
+}
+
+func (s *ClusterState) GetAgentNamespace() *network.Namespace {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.agentNamespace == nil {
+		return nil
+	}
+	copied := *s.agentNamespace
+	return &copied
+}
+
 func NewClusterState(cluster *spec.ClusterSpec) *ClusterState {
 	nodes := make([]*NodeState, 0, len(cluster.Nodes))
 	for _, node := range cluster.Nodes {
@@ -108,16 +129,10 @@ func (s *ClusterState) Nodes() []*NodeState {
 	return out
 }
 
-func (s *ClusterState) withWrite(fn func()) {
+func (s *ClusterState) SetAgentNamespace(ns *network.Namespace) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fn()
-}
-
-func (s *ClusterState) SetAgentNamespace(ns *network.Namespace) {
-	s.withWrite(func() {
-		s.agentNamespace = ns
-	})
+	s.agentNamespace = ns
 }
 
 func (s *ClusterState) FindContainer(nodeID, containerName string) *containers.RunningContainer {
