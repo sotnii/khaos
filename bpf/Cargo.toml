@@ -1,0 +1,10 @@
+[workspace]
+members = [
+#    "common",
+    "xdp-packet-drop",
+]
+
+resolver = "3"
+
+[workspace.dependencies]
+aya-ebpf = "0.1.1"

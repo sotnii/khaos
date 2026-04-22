@@ -1,0 +1,7 @@
+[package]
+name = "xdp-packet-drop"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+aya-ebpf = { workspace = true }

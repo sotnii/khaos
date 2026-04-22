@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/sotnii/pakostii/runtime/agent"
+	"github.com/sotnii/pakostii/internal/runtime/agent"
 )
 
 type Http struct {

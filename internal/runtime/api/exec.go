@@ -3,33 +3,34 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
-	"github.com/sotnii/pakostii/containers"
-	"github.com/sotnii/pakostii/logging"
+	"github.com/sotnii/pakostii/internal/containers"
+	"github.com/sotnii/pakostii/spec"
 )
 
-type execStateView interface {
-	FindContainer(nodeID, containerName string) *containers.RunningContainer
+type ContainerManager interface {
+	FindContainer(id spec.NodeID, containerName string) *containers.RunningContainer
+	ExecInContainer(ctx context.Context, containerID string, argv []string) (*containers.ExecResult, error)
 }
 
 type Exec struct {
-	ctx     context.Context
-	state   execStateView
-	manager containers.Manager
-	logger  logging.Logger
+	ctx        context.Context
+	containers ContainerManager
+	logger     *slog.Logger
 }
 
-func NewExec(ctx context.Context, state execStateView, manager containers.Manager, logger logging.Logger) *Exec {
-	return &Exec{ctx: ctx, state: state, manager: manager, logger: logger}
+func NewExec(ctx context.Context, containers ContainerManager, logger *slog.Logger) *Exec {
+	return &Exec{ctx: ctx, containers: containers, logger: logger}
 }
 
 func (e *Exec) ContainerCmd(nodeID, containerName string, argv ...string) (*containers.ExecResult, error) {
 	e.logger.Debug("exec requested", "node", nodeID, "service", containerName, "argv", argv)
-	container := e.state.FindContainer(nodeID, containerName)
+	container := e.containers.FindContainer(spec.NodeID(nodeID), containerName)
 	if container == nil {
 		return nil, fmt.Errorf("container %q on node %q not found", containerName, nodeID)
 	}
-	res, err := e.manager.ExecInContainer(e.ctx, container.ID, argv)
+	res, err := e.containers.ExecInContainer(e.ctx, container.ID, argv)
 	if err != nil {
 		e.logger.Error("exec failed", "node", nodeID, "service", containerName, "container_id", container.ID, "error", err)
 		return nil, err

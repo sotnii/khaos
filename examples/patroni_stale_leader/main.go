@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/sotnii/pakostii"
 	"github.com/sotnii/pakostii/logging"
-	"github.com/sotnii/pakostii/runtime"
 	"github.com/sotnii/pakostii/spec"
 )
 
@@ -63,14 +63,14 @@ func main() {
 		cluster.AddNode(spec.NewNode(nodeID).WithAZ(az).Runs(patroni))
 	}
 
-	test := runtime.NewTest(
+	test := pakostii.NewTest(
 		"patroni_stale_leader",
 		cluster,
-		runtime.WithLogger(logger),
+		pakostii.WithLogger(logger),
 	)
 
-	err := test.Run(context.Background(), func(ctx *runtime.Context) error {
-		resp, err := ctx.Http().Get("http://db1:8008/leader", time.Second*5)
+	err := test.Run(context.Background(), func(t *pakostii.TestHandle) error {
+		resp, err := t.Http().Get("http://db1:8008/leader", time.Second*5)
 		if err != nil {
 			return err
 		}

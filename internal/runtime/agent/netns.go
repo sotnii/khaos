@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/sotnii/pakostii/runtime/state"
+	"github.com/sotnii/pakostii/spec"
 	"github.com/vishvananda/netns"
 )
 
@@ -28,7 +28,7 @@ type ClusterHttpAgent struct {
 	hosts      map[string]string
 }
 
-func NewClusterHttpAgent(agentNsPath string, nodes []*state.NodeState) (*ClusterHttpAgent, error) {
+func NewClusterHttpAgent(agentNsPath string, nodeIPs map[spec.NodeID]net.IP) (*ClusterHttpAgent, error) {
 	orig, err := netns.Get()
 	if err != nil {
 		return nil, err
@@ -39,9 +39,8 @@ func NewClusterHttpAgent(agentNsPath string, nodes []*state.NodeState) (*Cluster
 	}
 
 	hosts := make(map[string]string)
-	for _, node := range nodes {
-		ns := node.Namespace()
-		hosts[string(node.Spec().ID)] = ns.AllocatedIP.String()
+	for id, ip := range nodeIPs {
+		hosts[string(id)] = ip.String()
 	}
 
 	return &ClusterHttpAgent{agentNS: agent, originalNS: orig, hosts: hosts}, nil

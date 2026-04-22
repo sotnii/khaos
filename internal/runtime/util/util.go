@@ -1,6 +1,8 @@
 package util
 
 import (
+	"crypto/rand"
+	"fmt"
 	"io"
 	"os"
 )
@@ -21,17 +23,6 @@ func MergeMaps(a, b map[string]string) map[string]string {
 	return out
 }
 
-func JoinLines(lines []string) string {
-	result := ""
-	for i, line := range lines {
-		if i > 0 {
-			result += "\n"
-		}
-		result += line
-	}
-	return result
-}
-
 func CopyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -49,4 +40,18 @@ func CopyFile(src, dst string) error {
 		return err
 	}
 	return out.Sync()
+}
+
+func NewResourceID() string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz"
+	var bytes [5]byte
+	if _, err := rand.Read(bytes[:]); err != nil {
+		panic(fmt.Sprintf("read random bytes: %v", err))
+	}
+
+	out := make([]byte, len(bytes))
+	for i, b := range bytes {
+		out[i] = alphabet[int(b)%len(alphabet)]
+	}
+	return string(out)
 }

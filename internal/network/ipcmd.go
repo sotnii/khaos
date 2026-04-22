@@ -48,7 +48,7 @@ func (c *IPCmd) LinkStatus(ctx context.Context, name string) (exists bool, up bo
 		}
 		return false, false, err
 	}
-	return true, strings.Contains(out, "state UP"), nil
+	return true, strings.Contains(out, "spec UP"), nil
 }
 
 func (c *IPCmd) AddBridge(ctx context.Context, name string) error {

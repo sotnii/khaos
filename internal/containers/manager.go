@@ -38,7 +38,7 @@ type manager struct {
 	logger      *slog.Logger
 }
 
-func NewManager(cfg Config) (Manager, error) {
+func NewRuntimeManager(cfg Config) (ContainerRuntimeManager, error) {
 	if cfg.Logger != nil {
 		cfg.Logger.Debug("connecting to containerd", "socket", cfg.Socket, "namespace", cfg.Namespace, "snapshotter", cfg.Snapshotter)
 	}

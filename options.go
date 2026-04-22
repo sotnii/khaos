@@ -1,15 +1,14 @@
-package runtime
+package pakostii
 
 import (
 	"log/slog"
 
-	"github.com/sotnii/pakostii/logging"
 	"github.com/sotnii/pakostii/spec"
 )
 
 type ClusterSpec = spec.ClusterSpec
 
-type RuntimeFactory func(name string, cluster *spec.ClusterSpec, logger logging.Logger) (*Runtime, error)
+type RuntimeFactory func(name string, cluster spec.ClusterSpec, logger *slog.Logger) (*TestRuntime, error)
 
 type TestOption func(*Test)
 

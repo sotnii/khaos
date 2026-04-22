@@ -1,0 +1,13 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+bpfAssetsDir := "./internal/runtime/api/assets"
+
+# Needs bpf-linker
+bpf:
+    cargo +nightly build \
+      --manifest-path bpf/Cargo.toml \
+      -p xdp-packet-drop \
+      --release \
+      --target bpfel-unknown-none \
+      -Z build-std=core
+    cp bpf/target/bpfel-unknown-none/release/xdp-packet-drop {{bpfAssetsDir}}/xdp-packet-drop.bpf.o

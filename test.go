@@ -1,24 +1,28 @@
-package runtime
+package pakostii
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/sotnii/pakostii/logging"
 )
 
 type Test struct {
 	name        string
-	clusterSpec *ClusterSpec
-	logger      logging.Logger
+	clusterSpec ClusterSpec
+	logger      *slog.Logger
 	runtime     RuntimeFactory
 }
 
 func NewTest(name string, cluster *ClusterSpec, opts ...TestOption) *Test {
+	if cluster == nil {
+		panic("cluster spec cannot be nil")
+	}
 	t := &Test{
 		name:        name,
-		clusterSpec: cluster,
+		clusterSpec: *cluster,
 		logger:      logging.NewDefaultLogger(),
-		runtime:     NewRuntime,
+		runtime:     NewTestRuntime,
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -26,7 +30,7 @@ func NewTest(name string, cluster *ClusterSpec, opts ...TestOption) *Test {
 	return t
 }
 
-func (t *Test) Run(ctx context.Context, fn func(*Context) error) error {
+func (t *Test) Run(ctx context.Context, fn func(*TestHandle) error) error {
 	rt, err := t.runtime(t.name, t.clusterSpec, t.logger)
 	if err != nil {
 		return err

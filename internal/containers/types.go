@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/sotnii/pakostii/network"
+	"github.com/sotnii/pakostii/internal/network"
 	"github.com/sotnii/pakostii/spec"
 )
 
@@ -55,7 +55,7 @@ type Event struct {
 	ExitCode    uint32
 }
 
-type Manager interface {
+type ContainerRuntimeManager interface {
 	RunContainer(ctx context.Context, req LaunchRequest) (*RunningContainer, error)
 	TeardownContainer(ctx context.Context, ctr RunningContainer) error
 	ExecInContainer(ctx context.Context, containerID string, argv []string) (*ExecResult, error)

@@ -21,7 +21,7 @@ type Namespace struct {
 	AllocatedIP net.IP
 }
 
-type Manager struct {
+type NamespaceManager struct {
 	prefix     string
 	bridgeName string
 	ip         *IPCmd
@@ -29,7 +29,7 @@ type Manager struct {
 	logger     *slog.Logger
 }
 
-func NewManager(prefix string, cmd Commander, logger *slog.Logger) (*Manager, error) {
+func NewManager(prefix string, cmd Commander, logger *slog.Logger) (*NamespaceManager, error) {
 	alloc, err := NewAllocator(defaultSubnet)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func NewManager(prefix string, cmd Commander, logger *slog.Logger) (*Manager, er
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
-	return &Manager{
+	return &NamespaceManager{
 		prefix:     prefix,
 		bridgeName: fmt.Sprintf("%s-bridge", prefix),
 		ip:         NewIPCmd(cmd),
@@ -47,7 +47,7 @@ func NewManager(prefix string, cmd Commander, logger *slog.Logger) (*Manager, er
 	}, nil
 }
 
-func (m *Manager) SetupBridge(ctx context.Context) error {
+func (m *NamespaceManager) SetupBridge(ctx context.Context) error {
 	m.logger.Debug("checking bridge", "bridge", m.bridgeName)
 	exists, up, err := m.ip.LinkStatus(ctx, m.bridgeName)
 	if err != nil {
@@ -69,7 +69,7 @@ func (m *Manager) SetupBridge(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) CreateNamespace(ctx context.Context, id, logicalName string) (*Namespace, error) {
+func (m *NamespaceManager) CreateNamespace(ctx context.Context, id, logicalName string) (*Namespace, error) {
 	name := fmt.Sprintf("%s-%s", m.prefix, logicalName)
 	path := filepath.Join("/run/netns", name)
 	m.logger.Debug("creating namespace", "namespace", name, "id", id, "path", path)
@@ -88,7 +88,7 @@ func (m *Manager) CreateNamespace(ctx context.Context, id, logicalName string) (
 	return &Namespace{ID: id, Name: name, Path: path}, nil
 }
 
-func (m *Manager) SetupNamespace(ctx context.Context, ns *Namespace) error {
+func (m *NamespaceManager) SetupNamespace(ctx context.Context, ns *Namespace) error {
 	m.logger.Debug("setting up namespace", "namespace", ns.Name, "id", ns.ID)
 	if err := m.ip.NamespaceLinkUp(ctx, ns.Name, "lo"); err != nil {
 		return fmt.Errorf("bring loopback up in %s: %w", ns.Name, err)
@@ -128,7 +128,7 @@ func (m *Manager) SetupNamespace(ctx context.Context, ns *Namespace) error {
 	return nil
 }
 
-func (m *Manager) TeardownNamespace(ctx context.Context, ns *Namespace) error {
+func (m *NamespaceManager) TeardownNamespace(ctx context.Context, ns *Namespace) error {
 	if ns == nil {
 		return nil
 	}
