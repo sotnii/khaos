@@ -9,8 +9,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/lmittmann/tint"
 	"github.com/sotnii/pakostii"
-	"github.com/sotnii/pakostii/logging"
 	"github.com/sotnii/pakostii/spec"
 )
 
@@ -22,7 +22,9 @@ type PatroniLeaderResp struct {
 }
 
 func main() {
-	logger := logging.NewLogger(os.Stdout, slog.LevelDebug)
+	logger := slog.New(tint.NewHandler(os.Stdout, &tint.Options{
+		Level: slog.LevelDebug,
+	}))
 
 	cluster := spec.NewCluster("patroni_stale_leader")
 	etcdHosts := []spec.NodeID{"etcd1", "etcd2", "etcd3"}

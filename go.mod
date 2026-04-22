@@ -7,6 +7,7 @@ require (
 	github.com/containerd/containerd/api v1.8.0
 	github.com/containerd/errdefs v0.3.0
 	github.com/containerd/typeurl/v2 v2.1.1
+	github.com/lmittmann/tint v1.1.3
 	github.com/opencontainers/runtime-spec v1.1.0
 	github.com/vishvananda/netns v0.0.5
 )
