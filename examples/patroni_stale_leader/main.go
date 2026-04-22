@@ -84,6 +84,18 @@ func main() {
 		if p.Role != "primary" {
 			return fmt.Errorf("expected db1 to be cluster leader after cluster startup, instead got %v", p.Role)
 		}
+
+		i, err := t.Network().Partition().IsolateAZ("az1")
+		if err != nil {
+			return err
+		}
+
+		// TODO: Check that the cluster leader is changed
+
+		i.Heal()
+
+		// TODO: Check that after healing, db1 does not thing that it's a leader
+
 		return nil
 	})
 }

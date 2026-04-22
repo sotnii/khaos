@@ -17,7 +17,8 @@ import (
 
 type NodeNetworkResolver interface {
 	NodeIPs() map[spec.NodeID]net.IP
-	GetNamespace(id spec.NodeID) *network.Namespace
+	HasNamespace(id spec.NodeID) bool
+	GetNamespace(id spec.NodeID) network.Namespace
 }
 
 type ContainerManager struct {
@@ -73,10 +74,10 @@ func (p *ContainerManager) Prepare(ctx context.Context, clusterSpec spec.Cluster
 	)
 
 	for _, nodeSpec := range clusterSpec.Nodes {
-		netns := nodeNet.GetNamespace(nodeSpec.ID)
-		if netns == nil {
+		if !nodeNet.HasNamespace(nodeSpec.ID) {
 			return fmt.Errorf("could not find network namespace for node %s", nodeSpec.ID)
 		}
+		netns := nodeNet.GetNamespace(nodeSpec.ID)
 		for _, containerSpec := range nodeSpec.Containers {
 			wg.Add(1)
 			go func(nodeSpec spec.NodeSpec, containerSpec spec.ContainerSpec, netns network.Namespace) {
@@ -110,7 +111,7 @@ func (p *ContainerManager) Prepare(ctx context.Context, clusterSpec spec.Cluster
 				defer p.mu.Unlock()
 				p.containers[nodeSpec.ID] = append(p.containers[nodeSpec.ID], *running)
 				p.logger.Info("container running", "node", nodeSpec.ID, "container_id", running.ID, "name", running.Name)
-			}(nodeSpec, containerSpec, *netns)
+			}(nodeSpec, containerSpec, netns)
 		}
 	}
 
