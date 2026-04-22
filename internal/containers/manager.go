@@ -20,6 +20,7 @@ import (
 	"github.com/containerd/errdefs"
 	"github.com/containerd/typeurl/v2"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/sotnii/pakostii/internal/runtime/common"
 )
 
 type Config struct {
@@ -85,16 +86,29 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 	}
 	m.logger.Debug("image ready", "container_id", req.ID, "image", image.Name())
 
+	var cleanup common.CleanupStack
+	defer cleanup.Run()
+
 	bundleDir, mounts, err := m.prepareFiles(req.ID, req.Files)
 	if err != nil {
 		return nil, err
 	}
+	cleanup.Push(func() {
+		m.logger.Debug("cleanup bundle dir", "container_id", req.ID, "dir", bundleDir)
+		_ = os.RemoveAll(bundleDir)
+	})
 	m.logger.Debug("prepared injected files", "container_id", req.ID, "bundle_dir", bundleDir, "mount_count", len(mounts))
+
 	containerIO, stdoutWriter, stderrWriter, err := m.prepareContainerIO(req.ID)
 	if err != nil {
-		_ = os.RemoveAll(bundleDir)
 		return nil, err
 	}
+	cleanup.Push(func() {
+		if containerIO.Dir != "" {
+			m.logger.Debug("cleanup container io dir", "container_id", req.ID, "dir", containerIO.Dir)
+			_ = os.RemoveAll(containerIO.Dir)
+		}
+	})
 
 	snapshotKey := req.ID + "-snapshot"
 	opts := []containerd.NewContainerOpts{
@@ -116,12 +130,17 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 		),
 	}
 
+	cleanupCtx, cleanupCancel := m.newCleanupContext()
+	defer cleanupCancel()
+
 	container, err := m.client.NewContainer(ctx, req.ID, opts...)
 	if err != nil {
-		_ = os.RemoveAll(containerIO.Dir)
-		_ = os.RemoveAll(bundleDir)
 		return nil, fmt.Errorf("create container %s: %w", req.ID, err)
 	}
+	cleanup.Push(func() {
+		m.logger.Debug("cleanup container metadata", "container_id", req.ID, "snapshot_key", snapshotKey)
+		_ = container.Delete(cleanupCtx, containerd.WithSnapshotCleanup)
+	})
 	m.logger.Debug("container metadata created", "container_id", req.ID, "snapshot_key", snapshotKey)
 
 	task, err := container.NewTask(
@@ -132,21 +151,20 @@ func (m *manager) RunContainer(ctx context.Context, req LaunchRequest) (*Running
 		),
 	)
 	if err != nil {
-		_ = container.Delete(ctx, containerd.WithSnapshotCleanup)
-		_ = os.RemoveAll(containerIO.Dir)
-		_ = os.RemoveAll(bundleDir)
 		return nil, fmt.Errorf("create task for %s: %w", req.ID, err)
 	}
+	cleanup.Push(func() {
+		m.logger.Debug("cleanup container task", "container_id", req.ID)
+		_, _ = task.Delete(cleanupCtx, containerd.WithProcessKill)
+	})
 	m.logger.Debug("task created", "container_id", req.ID)
 
 	if err := task.Start(ctx); err != nil {
-		_, _ = task.Delete(ctx)
-		_ = container.Delete(ctx, containerd.WithSnapshotCleanup)
-		_ = os.RemoveAll(containerIO.Dir)
-		_ = os.RemoveAll(bundleDir)
 		return nil, fmt.Errorf("start task for %s: %w", req.ID, err)
 	}
 
+	m.logger.Debug("cleanup stack cleared after successful container start", "container_id", req.ID)
+	cleanup.Clear()
 	m.logger.Info("container started", "container_id", req.ID, "image", req.ImageRef)
 	return &RunningContainer{
 		ID:          req.ID,
@@ -348,6 +366,11 @@ func (m *manager) ObserveEvents(ctx context.Context) (<-chan Event, <-chan error
 	}()
 
 	return out, errOut, nil
+}
+
+func (m *manager) newCleanupContext() (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	return namespaces.WithNamespace(ctx, m.namespace), cancel
 }
 
 func (m *manager) Close() error {

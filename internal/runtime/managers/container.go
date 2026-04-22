@@ -26,7 +26,22 @@ type ContainerManager struct {
 	containers map[spec.NodeID][]containers.RunningContainer
 	runtime    containers.ContainerRuntimeManager
 	logger     *slog.Logger
+	status     containerManagerStatus
+
+	// launchWG tracks all launch goroutines for this manager instance.
+	// The manager is single-use: one Prepare, then one Teardown.
+	launchWG sync.WaitGroup
 }
+
+type containerManagerStatus uint8
+
+const (
+	containerManagerStatusReady containerManagerStatus = iota
+	containerManagerStatusPreparing
+	containerManagerStatusPrepared
+	containerManagerStatusClosing
+	containerManagerStatusClosed
+)
 
 func (p *ContainerManager) FindContainer(id spec.NodeID, containerName string) *containers.RunningContainer {
 	p.mu.RLock()
@@ -58,17 +73,33 @@ func NewContainerManager(containerd containers.ContainerRuntimeManager, logger *
 func (p *ContainerManager) ContainersOf(id spec.NodeID) []containers.RunningContainer {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.containers[id]
+	out := append([]containers.RunningContainer(nil), p.containers[id]...)
+	return out
 }
 
 func (p *ContainerManager) Prepare(ctx context.Context, clusterSpec spec.ClusterSpec, testId string, nodeNet NodeNetworkResolver) error {
+	p.mu.Lock()
+	if p.status != containerManagerStatusReady {
+		p.mu.Unlock()
+		return fmt.Errorf("container manager prepare not allowed in status %s", p.status)
+	}
+	p.status = containerManagerStatusPreparing
+	p.mu.Unlock()
+
+	defer func() {
+		p.mu.Lock()
+		if p.status == containerManagerStatusPreparing {
+			p.status = containerManagerStatusPrepared
+		}
+		p.mu.Unlock()
+	}()
+
 	hostsFile, err := p.buildHostsFile(nodeNet.NodeIPs())
 	if err != nil {
 		return err
 	}
 
 	var (
-		wg      sync.WaitGroup
 		errMu   sync.Mutex
 		runErrs []error
 	)
@@ -79,9 +110,9 @@ func (p *ContainerManager) Prepare(ctx context.Context, clusterSpec spec.Cluster
 		}
 		netns := nodeNet.GetNamespace(nodeSpec.ID)
 		for _, containerSpec := range nodeSpec.Containers {
-			wg.Add(1)
+			p.launchWG.Add(1)
 			go func(nodeSpec spec.NodeSpec, containerSpec spec.ContainerSpec, netns network.Namespace) {
-				defer wg.Done()
+				defer p.launchWG.Done()
 
 				request := containers.LaunchRequest{
 					ID:          fmt.Sprintf("pkst-%s-%s-%s-%s", testId, nodeSpec.ID, containerSpec.Name, util.NewResourceID()),
@@ -108,20 +139,35 @@ func (p *ContainerManager) Prepare(ctx context.Context, clusterSpec spec.Cluster
 				}
 
 				p.mu.Lock()
-				defer p.mu.Unlock()
 				p.containers[nodeSpec.ID] = append(p.containers[nodeSpec.ID], *running)
+				p.mu.Unlock()
 				p.logger.Info("container running", "node", nodeSpec.ID, "container_id", running.ID, "name", running.Name)
 			}(nodeSpec, containerSpec, netns)
 		}
 	}
 
-	wg.Wait()
+	p.launchWG.Wait()
 	return errors.Join(runErrs...)
 }
 
 func (p *ContainerManager) Teardown(ctx context.Context) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	switch p.status {
+	case containerManagerStatusClosing, containerManagerStatusClosed:
+		p.mu.Unlock()
+		return nil
+	default:
+		p.status = containerManagerStatusClosing
+	}
+	p.mu.Unlock()
+
+	p.launchWG.Wait()
+
+	p.mu.Lock()
+	defer func() {
+		p.status = containerManagerStatusClosed
+		p.mu.Unlock()
+	}()
 	var errs []error
 
 	for nodeId, runningContainers := range p.containers {
@@ -157,4 +203,21 @@ func (p *ContainerManager) Close() error {
 
 func (p *ContainerManager) ObserveEvents(ctx context.Context) (<-chan containers.Event, <-chan error, error) {
 	return p.runtime.ObserveEvents(ctx)
+}
+
+func (s containerManagerStatus) String() string {
+	switch s {
+	case containerManagerStatusReady:
+		return "ready"
+	case containerManagerStatusPreparing:
+		return "preparing"
+	case containerManagerStatusPrepared:
+		return "prepared"
+	case containerManagerStatusClosing:
+		return "closing"
+	case containerManagerStatusClosed:
+		return "closed"
+	default:
+		return fmt.Sprintf("unknown(%d)", s)
+	}
 }

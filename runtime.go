@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 	"syscall"
 	"time"
 
@@ -39,6 +40,25 @@ type TestRuntime struct {
 	containers   managers.ContainerManager
 	workDir      string
 	artifactsDir string
+}
+
+type signalState struct {
+	mu  sync.Mutex
+	sig os.Signal
+}
+
+func (s *signalState) set(sig os.Signal) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sig == nil {
+		s.sig = sig
+	}
+}
+
+func (s *signalState) get() os.Signal {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sig
 }
 
 func NewTestRuntime(name string, cluster spec.ClusterSpec, logger *slog.Logger) (*TestRuntime, error) {
@@ -78,9 +98,31 @@ func NewTestRuntime(name string, cluster spec.ClusterSpec, logger *slog.Logger) 
 
 func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (result TestResult) {
 	ctx, cancel := context.WithCancel(ctx)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
+
+	sigState := &signalState{}
+	go func() {
+		select {
+		case sig := <-signals:
+			sigState.set(sig)
+			r.logger.Warn("received termination signal", "signal", sig.String())
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	r.logger.Info("test runtime starting", "nodes", len(r.spec.Nodes), "artifacts_dir", r.artifactsDir, "work_dir", r.workDir)
 	defer cancel()
 	defer func() {
+		if v := recover(); v != nil {
+			result = TestResult{
+				ErrorMessage: fmt.Sprintf("test runtime panicked: %v", v),
+				StackTrace:   string(debug.Stack()),
+			}
+		}
+
 		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer teardownCancel()
 
@@ -97,7 +139,7 @@ func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (resu
 	}()
 
 	if err := r.prepare(ctx); err != nil {
-		return TestResult{ErrorMessage: err.Error()}
+		return resultFromError(err, sigState)
 	}
 
 	agentNs := r.network.AgentNamespace()
@@ -106,11 +148,11 @@ func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (resu
 	}
 	httpAgent, err := agent.NewClusterHttpAgent(agentNs.Path, r.network.NodeIPs())
 	if err != nil {
-		return TestResult{ErrorMessage: err.Error()}
+		return resultFromError(err, sigState)
 	}
 	defer httpAgent.Close()
 
-	return r.runTest(ctx, cancel, newTestHandle(
+	return r.runTest(ctx, cancel, sigState, newTestHandle(
 		ctx,
 		r.spec,
 		&r.containers,
@@ -131,7 +173,7 @@ func (r *TestRuntime) prepare(ctx context.Context) error {
 	return nil
 }
 
-func (r *TestRuntime) runTest(ctx context.Context, cancel context.CancelFunc, handle *TestHandle, fn func(*TestHandle) error) TestResult {
+func (r *TestRuntime) runTest(ctx context.Context, cancel context.CancelFunc, sigState *signalState, handle *TestHandle, fn func(*TestHandle) error) TestResult {
 	events, errs, err := r.containers.ObserveEvents(ctx)
 	if err != nil {
 		r.logger.Warn("container event subscription failed", "error", err)
@@ -156,10 +198,6 @@ func (r *TestRuntime) runTest(ctx context.Context, cancel context.CancelFunc, ha
 		testResult <- TestResult{}
 	}()
 
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(signals)
-
 	var testFinished bool
 
 	for {
@@ -169,10 +207,6 @@ func (r *TestRuntime) runTest(ctx context.Context, cancel context.CancelFunc, ha
 			r.logger.Info("user test callback finished", "error", result.ErrorMessage)
 			cancel()
 			return result
-		case sig := <-signals:
-			r.logger.Warn("received termination signal", "signal", sig.String())
-			cancel()
-			return TestResult{ErrorMessage: fmt.Errorf("%w: %s", runtime.ErrTestCancelled, sig.String()).Error()}
 		case event, ok := <-events:
 			if ok {
 				r.logger.Warn("container process exited", "container_id", event.ContainerID, "exec_id", event.ExecID, "exit_code", event.ExitCode)
@@ -186,13 +220,23 @@ func (r *TestRuntime) runTest(ctx context.Context, cancel context.CancelFunc, ha
 				errs = nil
 			}
 		case <-ctx.Done():
-			if testFinished || errors.Is(ctx.Err(), context.Canceled) {
+			if testFinished {
 				r.logger.Debug("runtime context canceled after normal completion")
 				return TestResult{}
 			}
-			return TestResult{ErrorMessage: ctx.Err().Error()}
+			return resultFromError(ctx.Err(), sigState)
 		}
 	}
+}
+
+func resultFromError(err error, sigState *signalState) TestResult {
+	if err == nil {
+		return TestResult{}
+	}
+	if sig := sigState.get(); sig != nil {
+		return TestResult{ErrorMessage: fmt.Errorf("%w: %s", runtime.ErrTestCancelled, sig.String()).Error()}
+	}
+	return TestResult{ErrorMessage: err.Error()}
 }
 
 func (r *TestRuntime) teardown(ctx context.Context) error {
