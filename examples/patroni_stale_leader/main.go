@@ -71,7 +71,7 @@ func main() {
 		pakostii.WithLogger(logger),
 	)
 
-	err := test.Run(context.Background(), func(t *pakostii.TestHandle) error {
+	test.Run(context.Background(), func(t *pakostii.TestHandle) error {
 		resp, err := t.Http().Get("http://db1:8008/leader", time.Second*5)
 		if err != nil {
 			return err
@@ -86,8 +86,4 @@ func main() {
 		}
 		return nil
 	})
-
-	if err != nil {
-		logger.Error("test run failed", "err", err)
-	}
 }

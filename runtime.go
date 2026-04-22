@@ -58,9 +58,9 @@ func NewTestRuntime(name string, cluster spec.ClusterSpec, logger *slog.Logger) 
 		id:           testId,
 		name:         name,
 		spec:         cluster,
-		logger:       logger.With("test", name),
-		containers:   managers.NewContainerManager(containerRuntimeManager, logger.With("test", name)),
-		network:      managers.NewNetworkManager(nsMgr, logger.With("test", name)),
+		logger:       logger,
+		containers:   managers.NewContainerManager(containerRuntimeManager, logger),
+		network:      managers.NewNetworkManager(nsMgr, logger),
 		workDir:      workDir,
 		artifactsDir: filepath.Join(".pakostii", fmt.Sprintf("%s-%s", name, testId)),
 	}, nil
@@ -68,7 +68,7 @@ func NewTestRuntime(name string, cluster spec.ClusterSpec, logger *slog.Logger) 
 
 func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (runErr error) {
 	ctx, cancel := context.WithCancel(ctx)
-	r.logger.Info("runtime starting", "nodes", len(r.spec.Nodes), "artifacts_dir", r.artifactsDir, "work_dir", r.workDir)
+	r.logger.Info("test runtime starting", "nodes", len(r.spec.Nodes), "artifacts_dir", r.artifactsDir, "work_dir", r.workDir)
 	defer cancel()
 	defer func() {
 		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -81,7 +81,7 @@ func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (runE
 			runErr = errors.Join(runErr, teardownErr)
 		}
 		_ = r.containers.Close()
-		r.logger.Info("runtime finished", "error", runErr)
+		r.logger.Debug("test runtime finished", "error", runErr)
 	}()
 
 	if err := r.prepare(ctx); err != nil {

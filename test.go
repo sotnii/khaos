@@ -3,6 +3,7 @@ package pakostii
 import (
 	"context"
 	"log/slog"
+	"os"
 
 	"github.com/sotnii/pakostii/logging"
 )
@@ -30,10 +31,17 @@ func NewTest(name string, cluster *ClusterSpec, opts ...TestOption) *Test {
 	return t
 }
 
-func (t *Test) Run(ctx context.Context, fn func(*TestHandle) error) error {
-	rt, err := t.runtime(t.name, t.clusterSpec, t.logger)
+func (t *Test) Run(ctx context.Context, fn func(*TestHandle) error) {
+	logger := t.logger.With("test", t.name)
+	rt, err := t.runtime(t.name, t.clusterSpec, logger)
 	if err != nil {
-		return err
+		logger.Error("error creating runtime", "error", err)
+		os.Exit(1)
 	}
-	return rt.Run(ctx, fn)
+	err = rt.Run(ctx, fn)
+	if err != nil {
+		logger.Error("test failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("test passed")
 }
