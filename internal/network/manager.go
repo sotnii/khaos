@@ -132,6 +132,12 @@ func (m *NamespaceManager) TeardownNamespace(ctx context.Context, ns *Namespace)
 	if ns == nil {
 		return nil
 	}
+	if _, err := os.Stat(ns.Path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat namespace %s: %w", ns.Name, err)
+	}
 	m.logger.Debug("tearing down namespace", "namespace", ns.Name)
 	if err := m.ip.DeleteNamespace(ctx, ns.Name); err != nil {
 		return fmt.Errorf("delete namespace %s: %w", ns.Name, err)

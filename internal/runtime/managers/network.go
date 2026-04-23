@@ -14,11 +14,21 @@ import (
 
 type NetworkManager struct {
 	nsMgr          *network.NamespaceManager
-	prepared       bool
+	status         networkManagerStatus
 	namespaces     map[spec.NodeID]network.Namespace
 	agentNamespace *network.Namespace
 	logger         *slog.Logger
 }
+
+type networkManagerStatus uint8
+
+const (
+	networkManagerStatusReady networkManagerStatus = iota
+	networkManagerStatusPreparing
+	networkManagerStatusPrepared
+	networkManagerStatusClosing
+	networkManagerStatusClosed
+)
 
 func (m *NetworkManager) HasNamespace(id spec.NodeID) bool {
 	_, ok := m.namespaces[id]
@@ -54,9 +64,10 @@ func (m *NetworkManager) NodeIPs() map[spec.NodeID]net.IP {
 }
 
 func (m *NetworkManager) Prepare(ctx context.Context, spec spec.ClusterSpec) error {
-	if m.prepared {
-		return nil
+	if m.status != networkManagerStatusReady {
+		return fmt.Errorf("network manager prepare not allowed in status %s", m.status)
 	}
+	m.status = networkManagerStatusPreparing
 
 	m.logger.Info("preparing network")
 	if err := m.nsMgr.SetupBridge(ctx); err != nil {
@@ -68,12 +79,11 @@ func (m *NetworkManager) Prepare(ctx context.Context, spec spec.ClusterSpec) err
 	if err != nil {
 		return err
 	}
+	m.agentNamespace = agentNS
 	if err := m.nsMgr.SetupNamespace(ctx, agentNS); err != nil {
 		return err
 	}
 	m.logger.Debug("agent namespace ready", "namespace", agentNS.Name, "path", agentNS.Path)
-
-	m.agentNamespace = agentNS
 
 	for _, nodeSpec := range spec.Nodes {
 		resourceId := util.NewResourceID()
@@ -82,18 +92,24 @@ func (m *NetworkManager) Prepare(ctx context.Context, spec spec.ClusterSpec) err
 		if err != nil {
 			return err
 		}
+		m.namespaces[nodeSpec.ID] = *ns
 		if err := m.nsMgr.SetupNamespace(ctx, ns); err != nil {
 			return err
 		}
-
-		m.namespaces[nodeSpec.ID] = *ns
 	}
 
-	m.prepared = true
+	m.status = networkManagerStatusPrepared
 	return nil
 }
 
 func (m *NetworkManager) Teardown(ctx context.Context) error {
+	switch m.status {
+	case networkManagerStatusClosing, networkManagerStatusClosed:
+		return nil
+	default:
+		m.status = networkManagerStatusClosing
+	}
+
 	var errs []error
 	err := m.nsMgr.TeardownNamespace(ctx, m.agentNamespace)
 	if err != nil {
@@ -110,7 +126,24 @@ func (m *NetworkManager) Teardown(ctx context.Context) error {
 	}
 
 	clear(m.namespaces)
-	m.prepared = false
+	m.status = networkManagerStatusClosed
 
 	return errors.Join(errs...)
+}
+
+func (s networkManagerStatus) String() string {
+	switch s {
+	case networkManagerStatusReady:
+		return "ready"
+	case networkManagerStatusPreparing:
+		return "preparing"
+	case networkManagerStatusPrepared:
+		return "prepared"
+	case networkManagerStatusClosing:
+		return "closing"
+	case networkManagerStatusClosed:
+		return "closed"
+	default:
+		return fmt.Sprintf("unknown(%d)", s)
+	}
 }
