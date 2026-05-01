@@ -7,9 +7,9 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"runtime"
 	"time"
 
+	"github.com/sotnii/pakostii/internal/runtime/util"
 	"github.com/sotnii/pakostii/spec"
 	"github.com/vishvananda/netns"
 )
@@ -23,16 +23,11 @@ type HttpAgent interface {
 }
 
 type ClusterHttpAgent struct {
-	originalNS netns.NsHandle
-	agentNS    netns.NsHandle
-	hosts      map[string]string
+	agentNS netns.NsHandle
+	hosts   map[string]string
 }
 
 func NewClusterHttpAgent(agentNsPath string, nodeIPs map[spec.NodeID]net.IP) (*ClusterHttpAgent, error) {
-	orig, err := netns.Get()
-	if err != nil {
-		return nil, err
-	}
 	agent, err := netns.GetFromPath(agentNsPath)
 	if err != nil {
 		return nil, err
@@ -43,11 +38,7 @@ func NewClusterHttpAgent(agentNsPath string, nodeIPs map[spec.NodeID]net.IP) (*C
 		hosts[string(id)] = ip.String()
 	}
 
-	return &ClusterHttpAgent{agentNS: agent, originalNS: orig, hosts: hosts}, nil
-}
-
-func (agent *ClusterHttpAgent) Close() error {
-	return agent.originalNS.Close()
+	return &ClusterHttpAgent{agentNS: agent, hosts: hosts}, nil
 }
 
 func (agent *ClusterHttpAgent) Do(req *http.Request, timeout time.Duration) (*HttpResult, error) {
@@ -64,18 +55,23 @@ func (agent *ClusterHttpAgent) Do(req *http.Request, timeout time.Duration) (*Ht
 		return nil, fmt.Errorf("request URL host is empty")
 	}
 
-	return agent.do(req, timeout)
-}
-
-func (agent *ClusterHttpAgent) do(req *http.Request, timeout time.Duration) (*HttpResult, error) {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	err := netns.Set(agent.agentNS)
+	var res *HttpResult
+	err := util.WithNetNSHandle(agent.agentNS, func() error {
+		agentRes, err := agent.do(req, timeout)
+		if err != nil {
+			return err
+		}
+		res = agentRes
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer netns.Set(agent.originalNS)
 
+	return res, nil
+}
+
+func (agent *ClusterHttpAgent) do(req *http.Request, timeout time.Duration) (*HttpResult, error) {
 	dialAddr, err := agent.resolveDialAddress(req.URL.Host)
 	if err != nil {
 		return nil, err

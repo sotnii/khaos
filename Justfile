@@ -1,6 +1,6 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-bpfAssetsDir := "./internal/runtime/api/assets"
+bpfAssetsDir := "./internal/runtime/bpf/assets"
 
 # Needs bpf-linker
 bpf:

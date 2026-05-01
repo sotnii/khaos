@@ -15,7 +15,7 @@ import (
 type NetworkManager struct {
 	nsMgr          *network.NamespaceManager
 	status         networkManagerStatus
-	namespaces     map[spec.NodeID]network.Namespace
+	namespaces     map[spec.NodeID]*network.Namespace
 	agentNamespace *network.Namespace
 	logger         *slog.Logger
 }
@@ -37,7 +37,7 @@ func (m *NetworkManager) HasNamespace(id spec.NodeID) bool {
 
 func (m *NetworkManager) GetNamespace(id spec.NodeID) network.Namespace {
 	if _, ok := m.namespaces[id]; ok {
-		return m.namespaces[id]
+		return *m.namespaces[id]
 	}
 
 	panic("namespace " + id + " not found")
@@ -47,7 +47,7 @@ func NewNetworkManager(nsMgr *network.NamespaceManager, logger *slog.Logger) Net
 	return NetworkManager{
 		nsMgr:      nsMgr,
 		logger:     logger.With("component", "network_manager"),
-		namespaces: map[spec.NodeID]network.Namespace{},
+		namespaces: map[spec.NodeID]*network.Namespace{},
 	}
 }
 
@@ -92,7 +92,7 @@ func (m *NetworkManager) Prepare(ctx context.Context, spec spec.ClusterSpec) err
 		if err != nil {
 			return err
 		}
-		m.namespaces[nodeSpec.ID] = *ns
+		m.namespaces[nodeSpec.ID] = ns
 		if err := m.nsMgr.SetupNamespace(ctx, ns); err != nil {
 			return err
 		}
@@ -119,7 +119,7 @@ func (m *NetworkManager) Teardown(ctx context.Context) error {
 	m.agentNamespace = nil
 
 	for _, ns := range m.namespaces {
-		err := m.nsMgr.TeardownNamespace(ctx, &ns)
+		err := m.nsMgr.TeardownNamespace(ctx, ns)
 		if err != nil {
 			errs = append(errs, err)
 		}

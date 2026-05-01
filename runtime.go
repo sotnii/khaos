@@ -150,7 +150,6 @@ func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (resu
 	if err != nil {
 		return resultFromError(err, sigState)
 	}
-	defer httpAgent.Close()
 
 	return r.runTest(ctx, cancel, sigState, newTestHandle(
 		ctx,
@@ -204,7 +203,7 @@ func (r *TestRuntime) runTest(ctx context.Context, cancel context.CancelFunc, si
 		select {
 		case result := <-testResult:
 			testFinished = true
-			r.logger.Info("user test callback finished", "error", result.ErrorMessage)
+			r.logger.Debug("user test callback finished", "error", result.ErrorMessage)
 			cancel()
 			return result
 		case event, ok := <-events:

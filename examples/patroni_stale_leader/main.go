@@ -17,8 +17,18 @@ import (
 //go:embed patroni.yml
 var patroniConfig string
 
-type PatroniLeaderResp struct {
-	Role string `json:"role"`
+type PatroniNodeState struct {
+	Role    string `json:"role"`
+	Patroni struct {
+		Name string `json:"name"`
+	} `json:"patroni"`
+}
+
+type PatroniCluster struct {
+	Members []struct {
+		Name string `json:"name"`
+		Role string `json:"role"`
+	} `json:"members"`
 }
 
 func main() {
@@ -72,15 +82,9 @@ func main() {
 	)
 
 	test.Run(context.Background(), func(t *pakostii.TestHandle) error {
-		resp, err := t.Http().Get("http://db1:8008/leader", time.Second*5)
-		if err != nil {
-			return err
-		}
-		var p PatroniLeaderResp
-		err = json.Unmarshal(resp.Body, &p)
-		if err != nil {
-			return err
-		}
+		time.Sleep(10 * time.Second) // A hack until readiness probes are missing
+
+		p, err := getPatroniNodeState(t, "db1")
 		if p.Role != "primary" {
 			return fmt.Errorf("expected db1 to be cluster leader after cluster startup, instead got %v", p.Role)
 		}
@@ -89,13 +93,85 @@ func main() {
 		if err != nil {
 			return err
 		}
+		err = i.Apply()
+		if err != nil {
+			return err
+		}
 
-		// TODO: Check that the cluster leader is changed
+		newLeader, err := waitForLeaderChange(t, p.Patroni.Name, time.Second*60, logger)
+		if err != nil {
+			return err
+		}
+		logger.Info("leader changed", "newLeader", newLeader)
 
-		i.Heal()
+		err = i.Heal()
+		if err != nil {
+			return err
+		}
+
+		time.Sleep(time.Second * 30)
+		p, err = getPatroniNodeState(t, "db1")
+		if err != nil {
+			return err
+		}
+		logger.Info("db1 after heal state", "state", p)
 
 		// TODO: Check that after healing, db1 does not thing that it's a leader
 
 		return nil
 	})
+}
+
+func getPatroniNodeState(t *pakostii.TestHandle, node string) (*PatroniNodeState, error) {
+	resp, err := t.Http().Get(fmt.Sprintf("http://%s:8008/leader", node), time.Second*5)
+	if err != nil {
+		return nil, err
+	}
+	var p PatroniNodeState
+	err = json.Unmarshal(resp.Body, &p)
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func waitForLeaderChange(t *pakostii.TestHandle, originalClusterLeader string, timeout time.Duration, logger *slog.Logger) (string, error) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+	for {
+		select {
+		case <-tick.C:
+			cluster, err := fetchClusterState(t, "db2", time.Second*5)
+			if err != nil {
+				logger.Error("failed to fetch cluster state", "err", err)
+				continue
+			}
+
+			logger.Debug("fetched cluster state", "state", cluster)
+			for _, member := range cluster.Members {
+				if member.Role == "leader" && member.Name != originalClusterLeader {
+					return member.Name, nil
+				}
+			}
+		case <-t.Ctx.Done():
+			return "", fmt.Errorf("text context cancelled")
+		case <-timeoutTimer.C:
+			return "", fmt.Errorf("timed out waiting for leader change")
+		}
+	}
+}
+
+func fetchClusterState(t *pakostii.TestHandle, node string, timeout time.Duration) (*PatroniCluster, error) {
+	resp, err := t.Http().Get(fmt.Sprintf("http://%s:8008/cluster", node), timeout)
+	if err != nil {
+		return nil, err
+	}
+	var cluster PatroniCluster
+	err = json.Unmarshal(resp.Body, &cluster)
+	if err != nil {
+		return nil, err
+	}
+	return &cluster, nil
 }
