@@ -12,6 +12,7 @@ import (
 
 type TestHandle struct {
 	Ctx     context.Context
+	Logger  *slog.Logger
 	exec    *api.Exec
 	http    *api.Http
 	network *api.Network
@@ -20,6 +21,7 @@ type TestHandle struct {
 func newTestHandle(ctx context.Context, spec spec.ClusterSpec, containers *managers.ContainerManager, network *managers.NetworkManager, httpAgent agent.HttpAgent, logger *slog.Logger) *TestHandle {
 	return &TestHandle{
 		Ctx:     ctx,
+		Logger:  logger,
 		exec:    api.NewExec(ctx, containers, logger.With("component", "exec_api")),
 		http:    api.NewHttp(httpAgent),
 		network: api.NewNetwork(ctx, spec, network, logger.With("component", "network_api")),

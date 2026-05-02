@@ -27,13 +27,13 @@ type Partition struct {
 	logger          *slog.Logger
 	spec            spec.ClusterSpec
 	networkResolver NodeNetworkResolver
-
-	td *bpf.TrafficDrop
 }
 
 type AZIsolationHandle struct {
 	mu                      sync.Mutex
+	name                    string
 	logger                  *slog.Logger
+	allowedSources          []net.IP
 	trafficDrop             *bpf.TrafficDrop
 	handles                 []*bpf.TrafficDropHandle
 	affectedNamespacesNames []network.Namespace
@@ -54,43 +54,21 @@ func (n *Network) Partition() *Partition {
 	return n.partition
 }
 
-func (p *Partition) trafficDrop() (*bpf.TrafficDrop, error) {
-	if p.td == nil {
-		td, err := bpf.NewTrafficDrop()
-		if err != nil {
-			return nil, err
-		}
-		p.td = td
-
-		go func() {
-			<-p.ctx.Done()
-			p.logger.Debug("unloading traffic drop after context cancellation")
-			err := p.td.Unload()
-			if err != nil {
-				p.logger.Error("failed to unload traffic drop bpf", "error", err)
-			}
-		}()
-	}
-
-	return p.td, nil
-}
-
-func (p *Partition) IsolateAZ(az string) (*AZIsolationHandle, error) {
+func (p *Partition) IsolateAZ(name, az string) (*AZIsolationHandle, error) {
 	nodes := nodesWithAz(spec.AZID(az), &p.spec)
 	namespaces := make([]network.Namespace, len(nodes))
 	for i, node := range nodes {
 		namespaces[i] = p.networkResolver.GetNamespace(node)
 	}
 
-	p.logger.Debug("created isolation handle", "az", az)
+	allowedSources := namespaceIPs(namespaces)
 
-	td, err := p.trafficDrop()
-	if err != nil {
-		return nil, err
-	}
+	p.logger.Debug("created isolation handle", "az_isolation", name, "az", az, "ips", allowedSources)
+
 	handle := &AZIsolationHandle{
-		logger:                  p.logger.With("isolation", az),
-		trafficDrop:             td,
+		logger:                  p.logger.With("az_isolation", name),
+		name:                    name,
+		allowedSources:          allowedSources,
 		handles:                 make([]*bpf.TrafficDropHandle, 0),
 		affectedNamespacesNames: namespaces,
 	}
@@ -111,7 +89,25 @@ func (a *AZIsolationHandle) Apply() error {
 	a.mu.Lock()
 
 	if len(a.handles) > 0 {
+		a.mu.Unlock()
 		return fmt.Errorf("isolation handle is already applied, must be healed before reusing")
+	}
+
+	if a.trafficDrop == nil {
+		td, err := bpf.NewTrafficDrop(a.allowedSources)
+		if err != nil {
+			a.mu.Unlock()
+			return err
+		}
+		if err := td.StartPacketLogging(a.logger); err != nil {
+			unloadErr := td.Unload()
+			a.mu.Unlock()
+			if unloadErr != nil {
+				return errors.Join(err, fmt.Errorf("traffic drop cleanup failed: %w", unloadErr))
+			}
+			return err
+		}
+		a.trafficDrop = td
 	}
 
 	var errs []error
@@ -125,7 +121,7 @@ func (a *AZIsolationHandle) Apply() error {
 			if err != nil {
 				return fmt.Errorf("failed to find network interface %s in network namespace %s: %w", ns.Interface, ns.Name, err)
 			}
-			tdHandle, err = a.trafficDrop.Attach(iface)
+			tdHandle, err = a.trafficDrop.Attach(iface, ns.Name)
 			if err != nil {
 				return fmt.Errorf("failed to attach traffic drop to network namespace %s: %w", ns.Name, err)
 			}
@@ -157,7 +153,9 @@ func (a *AZIsolationHandle) Heal() error {
 	defer a.mu.Unlock()
 
 	if len(a.handles) == 0 {
-		return nil
+		if a.trafficDrop == nil {
+			return nil
+		}
 	}
 
 	var errs []error
@@ -171,6 +169,14 @@ func (a *AZIsolationHandle) Heal() error {
 
 	a.handles = a.handles[:0]
 
+	if a.trafficDrop != nil {
+		err := a.trafficDrop.Unload()
+		if err != nil {
+			errs = append(errs, err)
+		}
+		a.trafficDrop = nil
+	}
+
 	return errors.Join(errs...)
 }
 
@@ -183,4 +189,13 @@ func nodesWithAz(az spec.AZID, cs *spec.ClusterSpec) []spec.NodeID {
 	}
 
 	return nodes
+}
+
+func namespaceIPs(namespaces []network.Namespace) []net.IP {
+	ips := make([]net.IP, 0, len(namespaces))
+	for _, ns := range namespaces {
+		ips = append(ips, ns.AllocatedIP)
+	}
+
+	return ips
 }

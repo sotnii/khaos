@@ -32,10 +32,6 @@ type PatroniCluster struct {
 }
 
 func main() {
-	logger := slog.New(tint.NewHandler(os.Stdout, &tint.Options{
-		Level: slog.LevelDebug,
-	}))
-
 	cluster := spec.NewCluster("patroni_stale_leader")
 	etcdHosts := []spec.NodeID{"etcd1", "etcd2", "etcd3"}
 
@@ -43,7 +39,7 @@ func main() {
 		az := fmt.Sprintf("az%d", i+1)
 		etcd := spec.Etcd(
 			"etcd",
-			"quay.io/coreos/etcd:v3.5.29",
+			"quay.io/coreos/etcd:v3.5.21",
 			spec.EtcdConfig{
 				Name:         fmt.Sprintf("etcd%d", i+1),
 				RunsOnHost:   etcdHosts[i],
@@ -78,7 +74,9 @@ func main() {
 	test := pakostii.NewTest(
 		"patroni_stale_leader",
 		cluster,
-		pakostii.WithLogger(logger),
+		pakostii.WithLogger(slog.New(tint.NewHandler(os.Stdout, &tint.Options{
+			Level: slog.LevelDebug,
+		}))),
 	)
 
 	test.Run(context.Background(), func(t *pakostii.TestHandle) error {
@@ -86,10 +84,10 @@ func main() {
 
 		p, err := getPatroniNodeState(t, "db1")
 		if p.Role != "primary" {
-			return fmt.Errorf("expected db1 to be cluster leader after cluster startup, instead got %v", p.Role)
+			return fmt.Errorf("expected db1 to be cluster primary nod cluster startup, instead got %v", p.Role)
 		}
 
-		i, err := t.Network().Partition().IsolateAZ("az1")
+		i, err := t.Network().Partition().IsolateAZ("leader isolation", "az1")
 		if err != nil {
 			return err
 		}
@@ -98,11 +96,17 @@ func main() {
 			return err
 		}
 
-		newLeader, err := waitForLeaderChange(t, p.Patroni.Name, time.Second*60, logger)
+		e, err := t.Exec().ContainerCmd("db1", "patroni", "curl", "http://etcd1:2379/health")
 		if err != nil {
 			return err
 		}
-		logger.Info("leader changed", "newLeader", newLeader)
+		fmt.Println("cluster info response:", e)
+
+		newLeader, err := waitForLeaderChange(t, p.Patroni.Name, time.Second*60)
+		if err != nil {
+			return err
+		}
+		t.Logger.Info("leader changed", "newLeader", newLeader)
 
 		err = i.Heal()
 		if err != nil {
@@ -114,9 +118,10 @@ func main() {
 		if err != nil {
 			return err
 		}
-		logger.Info("db1 after heal state", "state", p)
-
-		// TODO: Check that after healing, db1 does not thing that it's a leader
+		t.Logger.Info("db1 after heal state", "state", p)
+		if p.Role != "replica" {
+			return fmt.Errorf("expected db1 to be replica after heal state, instead got %v", p.Role)
+		}
 
 		return nil
 	})
@@ -135,7 +140,7 @@ func getPatroniNodeState(t *pakostii.TestHandle, node string) (*PatroniNodeState
 	return &p, nil
 }
 
-func waitForLeaderChange(t *pakostii.TestHandle, originalClusterLeader string, timeout time.Duration, logger *slog.Logger) (string, error) {
+func waitForLeaderChange(t *pakostii.TestHandle, originalClusterLeader string, timeout time.Duration) (string, error) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	timeoutTimer := time.NewTimer(timeout)
@@ -145,11 +150,11 @@ func waitForLeaderChange(t *pakostii.TestHandle, originalClusterLeader string, t
 		case <-tick.C:
 			cluster, err := fetchClusterState(t, "db2", time.Second*5)
 			if err != nil {
-				logger.Error("failed to fetch cluster state", "err", err)
+				t.Logger.Error("failed to fetch cluster state", "err", err)
 				continue
 			}
 
-			logger.Debug("fetched cluster state", "state", cluster)
+			t.Logger.Debug("fetched cluster state", "state", cluster)
 			for _, member := range cluster.Members {
 				if member.Role == "leader" && member.Name != originalClusterLeader {
 					return member.Name, nil
