@@ -98,6 +98,7 @@ func NewTestRuntime(name string, cluster spec.ClusterSpec, logger *slog.Logger) 
 
 func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (result TestResult) {
 	ctx, cancel := context.WithCancel(ctx)
+	var handle *TestHandle
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
@@ -126,7 +127,10 @@ func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (resu
 		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer teardownCancel()
 
-		teardownErr := r.teardown(teardownCtx)
+		teardownErr := errors.Join(
+			r.cleanupHandle(handle),
+			r.teardown(teardownCtx),
+		)
 		if teardownErr != nil {
 			if result.Failed() {
 				result.ErrorMessage = errors.Join(errors.New(result.ErrorMessage), teardownErr).Error()
@@ -151,14 +155,16 @@ func (r *TestRuntime) Run(ctx context.Context, fn func(*TestHandle) error) (resu
 		return resultFromError(err, sigState)
 	}
 
-	return r.runTest(ctx, cancel, sigState, newTestHandle(
+	handle = newTestHandle(
 		ctx,
 		r.spec,
 		&r.containers,
 		&r.network,
 		httpAgent,
 		r.logger,
-	), fn)
+	)
+
+	return r.runTest(ctx, cancel, sigState, handle, fn)
 }
 
 func (r *TestRuntime) prepare(ctx context.Context) error {
@@ -236,6 +242,22 @@ func resultFromError(err error, sigState *signalState) TestResult {
 		return TestResult{ErrorMessage: fmt.Errorf("%w: %s", runtime.ErrTestCancelled, sig.String()).Error()}
 	}
 	return TestResult{ErrorMessage: err.Error()}
+}
+
+func (r *TestRuntime) cleanupHandle(handle *TestHandle) (err error) {
+	if handle == nil {
+		return nil
+	}
+
+	defer func() {
+		if v := recover(); v != nil {
+			r.logger.Error("api handle cleanup panicked", "panic", v, "stack", string(debug.Stack()))
+			err = fmt.Errorf("api handle cleanup panicked: %v", v)
+		}
+	}()
+
+	r.logger.Debug("cleaning up api handles")
+	return handle.Cleanup()
 }
 
 func (r *TestRuntime) teardown(ctx context.Context) error {

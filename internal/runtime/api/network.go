@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,10 +22,11 @@ type Network struct {
 }
 
 type Partition struct {
-	ctx             context.Context
+	mu              sync.Mutex
 	logger          *slog.Logger
 	spec            spec.ClusterSpec
 	networkResolver NodeNetworkResolver
+	handles         []*AZIsolationHandle
 }
 
 type AZIsolationHandle struct {
@@ -39,19 +39,26 @@ type AZIsolationHandle struct {
 	affectedNamespacesNames []network.Namespace
 }
 
-func NewNetwork(ctx context.Context, spec spec.ClusterSpec, networkResolver NodeNetworkResolver, logger *slog.Logger) *Network {
+func NewNetwork(spec spec.ClusterSpec, networkResolver NodeNetworkResolver, logger *slog.Logger) *Network {
 	return &Network{
 		partition: &Partition{
 			logger:          logger,
-			ctx:             ctx,
 			spec:            spec,
 			networkResolver: networkResolver,
+			handles:         make([]*AZIsolationHandle, 0),
 		},
 	}
 }
 
 func (n *Network) Partition() *Partition {
 	return n.partition
+}
+
+func (n *Network) Cleanup() error {
+	if n == nil || n.partition == nil {
+		return nil
+	}
+	return n.partition.Cleanup()
 }
 
 func (p *Partition) IsolateAZ(name, az string) (*AZIsolationHandle, error) {
@@ -73,16 +80,27 @@ func (p *Partition) IsolateAZ(name, az string) (*AZIsolationHandle, error) {
 		affectedNamespacesNames: namespaces,
 	}
 
-	go func() {
-		<-p.ctx.Done()
-		p.logger.Debug("automatically healing isolation handle after context cancellation")
-		err := handle.Heal()
-		if err != nil {
-			p.logger.Error("failed to heal isolation handle after context was cancelled", "error", err)
-		}
-	}()
+	p.mu.Lock()
+	p.handles = append(p.handles, handle)
+	p.mu.Unlock()
 
 	return handle, nil
+}
+
+func (p *Partition) Cleanup() error {
+	p.mu.Lock()
+	handles := append([]*AZIsolationHandle(nil), p.handles...)
+	p.handles = p.handles[:0]
+	p.mu.Unlock()
+
+	var errs []error
+	for _, handle := range handles {
+		if err := handle.Heal(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 func (a *AZIsolationHandle) Apply() error {

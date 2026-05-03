@@ -24,8 +24,15 @@ func newTestHandle(ctx context.Context, spec spec.ClusterSpec, containers *manag
 		Logger:  logger,
 		exec:    api.NewExec(ctx, containers, logger.With("component", "exec_api")),
 		http:    api.NewHttp(httpAgent),
-		network: api.NewNetwork(ctx, spec, network, logger.With("component", "network_api")),
+		network: api.NewNetwork(spec, network, logger.With("component", "network_api")),
 	}
+}
+
+func (t *TestHandle) Cleanup() error {
+	if t == nil || t.network == nil {
+		return nil
+	}
+	return t.network.Cleanup()
 }
 
 func (t *TestHandle) Exec() *api.Exec {
