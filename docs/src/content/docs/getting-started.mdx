@@ -1,0 +1,54 @@
+---
+title: Getting started
+description: Getting started with pakostii
+---
+
+In this guide, we'll build a test that allows as to observe how etcd can return a stale read when a node is requested
+to do a serializable read while being separated from the majority of the cluster. You will learn how to set up a pakostii cluster,
+apply network isolation faults and interact with cluster members via HTTP.
+
+## Prerequisites
+
+- Ensure your go version is at least 1.25.
+- Make sure you are on Linux with a kernel version >= 5.9 and BPF/XDP enabled for tests that use network isolation faults.
+- Containerd is installed and running on your system.
+- You have ability to run programs as root with `sudo`.
+
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="note" title="Why do I need sudo?">
+    Pakostii interfaces with Linux Kernel, Networking stack and Containerd directly, which requires root access for operations like network provisioning,
+    container lifecycle management and fault injection.
+
+    Curerntly each test needs root access, but it is planned to have a dedicated pakostii daemon that will allow to keep test code in non-root user mode.
+</Aside>
+
+## Setting up test project
+As of now, the only way to use pakostii is via the Go package and running each test as a standalone program.
+This is something that will be addressed pretty soon, but anyway, let's proceed.
+
+First and foremost, we need to set up a Go project.
+
+```bash
+mkdir pakostii-example
+cd pakostii-example
+go mod init pakostii-example
+```
+
+Then, we'll need to install pakostii itself.
+
+```bash
+go get github.com/sotnii/pakostii@latest
+```
+
+That's it! We're ready to proceed with writing our first line of code.
+
+
+## Creating a cluster
+
+Actually, I lied a bit. Before we proceed with writing code, let's quickly go over how you tell pakostii what cluster to create.
+
+Everything starts with a cluster specification that let's you define nodes. Each node is a abstraction over Linux network namespace, which allows
+to simulate running programs on different network nodes. Each node can have one or multiple services (containers) running on it. Nodes may also belong
+to a particular availability zone (AZ), which comes in handy when simulating cross-AZ availability issues.

@@ -1,0 +1,42 @@
+---
+title: About pakostii
+description: General overview of the pakostii project
+---
+
+Pakostii (pronounced "pak-ost-ee") is a distributed systems testing framework built with Go, utilizing power of Linux, eBPF, and Containerd.
+
+## Main Goals
+
+1. Be easy to use but powerful enough to handle complex distributed systems testing scenarios
+2. Allow easy to setup, easy to run, easy to debug environment for distributed systems testing
+3. Be easy to use in cloud environments like CI/CD pipelines in order to allow developers to streamline their testing workflows
+
+:::caution
+pakostii is in early alpha stage, all APIs and project architecture are subject to change. While the author would love to hear your feedback,
+please proceed with caution if you decide to use this project in any sort of high-stakes environment.
+:::
+
+## What you can do with pakostii
+
+While pakostii is at its early stages, it already provides a handful set of features for distributed systems testing.
+
+- Simulate a network of nodes with one or multiple services running on each node.
+- Define test cases with fault injection. Currently only network isolation faults are supported, while the end goal is to provide
+a suite of fault types to simulate real-world distributed systems failures, which includes all sorts of network issues, disk I/O issues, OOM, and more.
+- Interact with cluster members via provided APIs like in-cluster HTTP calls and per-container command execution.
+
+## What pakostii does for you
+
+pakostii's main goal is to simplify the setup it takes to run distributed systems tests by abstracting
+away network and container provisioning, fault injection, test teardown, while providing a powerful enough API exposed to test cases.
+
+pakostii takes care of:
+- Network provisioning by defining a custom network namespace for each node and creating a NAT gateway for communication between nodes.
+- OCI Container provisioning via Containerd.
+- Artifact collection for easy debugging and result analysis.
+- Teardown of resources after test execution, which includes stopping any container tasks and removing configured network topologies.
+
+
+## Sounds interesting?
+
+If this sounds interesting to you, head over to the [getting started](/getting-started) page to learn how to get started with pakostii.
