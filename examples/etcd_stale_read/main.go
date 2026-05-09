@@ -15,7 +15,7 @@ import (
 )
 
 func main() {
-	cluster := spec.NewCluster("etcd_stale_read")
+	cluster := spec.NewCluster()
 	etcdHosts := []string{"etcd1", "etcd2", "etcd3"}
 
 	for i, host := range etcdHosts {

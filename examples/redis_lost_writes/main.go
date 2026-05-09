@@ -28,7 +28,7 @@ var redisHosts = []string{"redis1", "redis2", "redis3", "redis4", "redis5"}
 func main() {
 	redislogging.Disable()
 
-	cluster := spec.NewCluster("redis_lost_writes")
+	cluster := spec.NewCluster()
 
 	for i, host := range redisHosts {
 		az := "az2"

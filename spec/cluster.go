@@ -6,7 +6,6 @@ type NodeID string
 type AZID string
 
 type ClusterSpec struct {
-	Name  string
 	Nodes []NodeSpec
 	AZs   map[AZID]AZSpec
 }
@@ -21,10 +20,9 @@ type AZSpec struct {
 	Nodes []NodeID
 }
 
-func NewCluster(name string) *ClusterSpec {
+func NewCluster() *ClusterSpec {
 	return &ClusterSpec{
-		Name: name,
-		AZs:  map[AZID]AZSpec{},
+		AZs: map[AZID]AZSpec{},
 	}
 }
 
