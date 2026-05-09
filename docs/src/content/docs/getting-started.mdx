@@ -3,8 +3,8 @@ title: Getting started
 description: Getting started with pakostii
 ---
 
-In this guide, we'll build a test that allows as to observe how etcd can return a stale read when a node is requested
-to do a serializable read while being separated from the majority of the cluster. You will learn how to set up a pakostii cluster,
+In this guide, we'll build a test that allows as to observe how a serializable read can return a stale data when a node 
+is separated from the majority of the cluster. You will learn how to set up a pakostii cluster, 
 apply network isolation faults and interact with cluster members via HTTP.
 
 ## Prerequisites
@@ -42,13 +42,103 @@ Then, we'll need to install pakostii itself.
 go get github.com/sotnii/pakostii@latest
 ```
 
+And for this particular test we will need the etcd client library.
+
+```bash
+go get github.com/etcd-io/etcd/client/v3
+```
+
 That's it! We're ready to proceed with writing our first line of code.
 
 
-## Creating a cluster
+## Creating a cluster and a basic test
 
 Actually, I lied a bit. Before we proceed with writing code, let's quickly go over how you tell pakostii what cluster to create.
 
-Everything starts with a cluster specification that let's you define nodes. Each node is a abstraction over Linux network namespace, which allows
+Everything starts with a cluster specification that lets you define nodes. Each node is a abstraction over Linux network namespace, which allows
 to simulate running programs on different network nodes. Each node can have one or multiple services (containers) running on it. Nodes may also belong
 to a particular availability zone (AZ), which comes in handy when simulating cross-AZ availability issues.
+
+The cluster we're trying to create can be illustrated as follows:
+
+:::caution
+TODO: Put diagram with how everything looks
+:::
+
+Now we have a basic understaing of what pakostii cluster is for, we can define one, and add 3 nodes each running an instance
+of etcd.
+
+```go
+import (
+	"context"
+	"fmt"
+
+	"github.com/sotnii/pakostii"
+	"github.com/sotnii/pakostii/spec"
+)
+
+func main() {
+	cluster := spec.NewCluster()
+	// Preparing the names of nodes for the etcd cluster. The name of the node is also used as it's hostname address
+	etcdHosts := []string{"etcd1", "etcd2", "etcd3"}
+
+	for i, host := range etcdHosts {
+		// Create an etcd service for each host using a dedicated helper for creating an etcd container spec
+		etcd := spec.Etcd(
+			"etcd", // name of the service, local to the node
+			"quay.io/coreos/etcd:v3.6.11", // image of the etcd container
+			// configuration helps setup etcd1 in a way to discover other nodes
+			spec.EtcdConfig{
+				Name:         host,
+				RunsOnHost:   etcdHosts[i],
+				ClusterHosts: etcdHosts,
+			},
+		)
+
+		// We're creating a 3-node cluster with etcd1 running in AZ1 and etcd2/etcd3 running in AZ2
+		az := 1
+		if i > 0 {
+			az = 2
+		}
+		
+		// This creates node spec that defines a node with a specific AZ and runs the etcd service on it
+		node := spec.
+					NewNode(host).
+					WithAZ(fmt.Sprintf("az%d", az)).
+					Runs(etcd)
+
+		cluster.AddNode(node)
+	}
+}
+```
+
+With this block of code we've programatically defined a cluster with 3 nodes running etcd. We've assigned each etcd instance to a specific AZ, which will
+allow us to apply network isolation to observe a stale read from etcd. 
+
+Let's proceed to creating the test environment.
+
+```go
+// ... Cluster spec creation ...
+
+// Besides the cluster spec, each tests needs a name that is used to identify test runs later. 
+test := pakostii.NewTest("etcd_stale_read", cluster)
+```
+
+Now we're ready to run the test. Let's start simple.
+
+```go
+// ... Previous code ...
+
+test.Run(context.Background(), func(t *pakostii.TestHandle) error {
+	return nil
+})
+```
+
+By calling `test.Run`, we instruct pakostii to provision the cluster and give control over the cluster to us.
+Before we explore what we can do using the `TestHandle`, let's try to run our program to make sure pakostii is able to provision the cluster.
+
+```bash
+# Remember to run as root, otherwise pakostii 
+# will not be able to provision the cluster
+sudo go run main.go
+```
