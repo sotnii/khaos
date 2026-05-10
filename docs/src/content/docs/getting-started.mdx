@@ -3,7 +3,7 @@ title: Getting started
 description: Getting started with pakostii
 ---
 
-In this guide, we'll build a test that allows as to observe how a serializable read can return a stale data when a node
+In this guide, we'll build a test that allows us to observe how a serializable read can return stale data when a node
 is separated from the majority of the cluster. You will learn how to set up a pakostii cluster,
 apply network isolation faults and interact with cluster members via HTTP.
 
@@ -22,7 +22,7 @@ import { Aside } from '@astrojs/starlight/components';
     Pakostii interfaces with Linux Kernel, Networking stack and Containerd directly, which requires root access for operations like network provisioning,
     container lifecycle management and fault injection.
 
-    Curerntly each test needs root access, but it is planned to have a dedicated pakostii daemon that will allow to keep test code in non-root user mode.
+    Currently each test needs root access, but it is planned to have a dedicated pakostii daemon that will allow keeping test code in non-root user mode.
 </Aside>
 
 ## Setting up test project
@@ -56,7 +56,7 @@ That's it! We're ready to proceed with writing our first line of code.
 
 Actually, I lied a bit. Before we proceed with writing code, let's quickly go over how you tell pakostii what cluster to create.
 
-Everything starts with a cluster specification that lets you define nodes. Each node is a abstraction over Linux network namespace, which allows
+Everything starts with a cluster specification that lets you define nodes. Each node is an abstraction over a Linux network namespace, which allows
 to simulate running programs on different network nodes. Each node can have one or multiple services (containers) running on it. Nodes may also belong
 to a particular availability zone (AZ), which comes in handy when simulating cross-AZ availability issues.
 
@@ -102,7 +102,7 @@ import (
 
 func main() {
 	cluster := spec.NewCluster()
-	// Preparing the names of nodes for the etcd cluster. The name of the node is also used as it's hostname address
+	// Preparing the names of nodes for the etcd cluster. The name of the node is also used as its hostname address
 	etcdHosts := []string{"etcd1", "etcd2", "etcd3"}
 
 	for i, host := range etcdHosts {
@@ -110,7 +110,7 @@ func main() {
 		etcd := spec.Etcd(
 			"etcd", // name of the service, local to the node
 			"quay.io/coreos/etcd:v3.6.11", // image of the etcd container
-			// configuration helps setup etcd1 in a way to discover other nodes
+			// configuration helps set up etcd1 in a way to discover other nodes
 			spec.EtcdConfig{
 				Name:         host,
 				RunsOnHost:   etcdHosts[i],
@@ -135,7 +135,7 @@ func main() {
 }
 ```
 
-With this block of code we've programatically defined a cluster with 3 nodes running etcd. We've assigned each etcd instance to a specific AZ, which will
+With this block of code we've programmatically defined a cluster with 3 nodes running etcd. We've assigned each etcd instance to a specific AZ, which will
 allow us to apply network isolation to observe a stale read from etcd.
 
 Let's proceed to creating the test environment.
@@ -143,7 +143,7 @@ Let's proceed to creating the test environment.
 ```go
 // ... Cluster spec creation ...
 
-// Besides the cluster spec, each tests needs a name that is used to identify test runs later.
+// Besides the cluster spec, each test needs a name that is used to identify test runs later.
 test := pakostii.NewTest("etcd_stale_read", cluster)
 ```
 
@@ -195,7 +195,7 @@ time=2026-05-10T11:25:12.630+03:00 level=INFO msg="test passed"
 ```
 
 By looking at the logs, we can see how pakostii provisions the network and runs containers. Once the environment is ready, the test is
-started and we can see our "Hello, World!" message logged as well. After that, our tests returns `nil`, which means the test passed.
+started and we can see our "Hello, World!" message logged as well. After that, our test returns `nil`, which means the test passed.
 Pakostii collects logs from the containers and tears down everything it created.
 
 The location for all test artifacts is `.pakostii` directory in the current working directory. Let's look at the general structure of the directory:
@@ -221,15 +221,15 @@ import { FileTree } from '@astrojs/starlight/components';
 
 Each test has a unique test ID that is generated on every test run, you might have noticed the `test_id` field in the logs. Pakostii will use test name and
 test ID to organize the logs for each test run.
-During runtime, pakostii collects stdin and stdout for each containers and stores the logs for each service under a node directory the service belongs to.
+During runtime, pakostii collects stdin and stdout for each container and stores the logs for each service under the node directory the service belongs to.
 
 With that out of the way, we are ready to explore what we can do during the test run.
 
 
 ## Port forwarding and etcd client setup
 
-We want interact with the etcd instances using the go etcd client library, but since all nodes in a cluster run in an
-isolated LAN that is not accessible from the host network by default, we will need to setup port forwarding for our etcd instances.
+We want to interact with the etcd instances using the Go etcd client library, but since all nodes in a cluster run in an
+isolated LAN that is not accessible from the host network by default, we will need to set up port forwarding for our etcd instances.
 
 To do that, we will use pakostii's `t.Network().ForwardPort()` API. For this test, we will only need to access `etcd1` and `etcd2`.
 Replace your "Hello World!" log with the following code:
@@ -267,8 +267,8 @@ test.Run(context.Background(), func(t *pakostii.TestHandle) error {
 })
 ```
 
-This piece of code will ask pakostii to setup port forwarding by assigning a random local port that will forward traffic to `etcd1:2379` and `etcd2:2379`.
-Using the port forwarding, we setup 2 etcd clients, one for each node.
+This piece of code will ask pakostii to set up port forwarding by assigning a random local port that will forward traffic to `etcd1:2379` and `etcd2:2379`.
+Using the port forwarding, we set up 2 etcd clients, one for each node.
 
 Without further ado, let's insert and get a value from etcd:
 
@@ -334,7 +334,7 @@ if err != nil {
 defer isolation.Heal()
 
 t.Logger.Info("waiting for new leader to be elected")
-// We'll wait 5 seconds to account for leader re-election in the majoriy
+// We'll wait 5 seconds to account for leader re-election in the majority
 time.Sleep(time.Second * 5)
 
 clientB := clients[1]
@@ -348,7 +348,7 @@ resp, err := clientA.Get(t.Ctx, "foo")
 if err != nil {
 	return err
 }
-val := string(getResp.Kvs[0].Value)
+val := string(resp.Kvs[0].Value)
 if val != "baz" {
 	return fmt.Errorf("expected value 'baz', got '%s'", val)
 }
@@ -374,7 +374,7 @@ time=2026-05-10T12:34:56.426+03:00 level=INFO msg="network tore down" test_id=kb
 time=2026-05-10T12:34:56.426+03:00 level=ERROR msg="test failed" error="etcdserver: request timed out"
 ```
 
-This happens because etcd client reads are linearizable, which means the node must sync it's state with the cluster before responding to the client.
+This happens because etcd client reads are linearizable, which means the node must sync its state with the cluster before responding to the client.
 
 From etcd [documentation](https://etcd.io/docs/v3.5/learning/api_guarantees):
 > etcd ensures linearizability for all other operations by default.
@@ -404,8 +404,8 @@ time=2026-05-10T12:41:17.581+03:00 level=ERROR msg="test failed" error="expected
 
 ## Congratulations!
 
-That's it! We successfully setup an etcd cluster, isolated one node and got a stale read from it. Of course, we haven't found any bugs today,
-but we've learned about how etcd handles network issues and cluster split-brain scenarios. The example code have been simplified for clarity purposes,
+That's it! We successfully set up an etcd cluster, isolated one node and got a stale read from it. Of course, we haven't found any bugs today,
+but we've learned about how etcd handles network issues and cluster split-brain scenarios. The example code has been simplified for clarity purposes,
 but you can find a more complete example in the [etcd stale read example](https://github.com/sotnii/pakostii/blob/main/examples/etcd_stale_read/main.go) in the pakostii's examples.
 
 You can also head over to [examples](/pakostii/examples) to see a full list of examples available in the pakostii repository,
@@ -428,7 +428,7 @@ import (
 
 func main() {
   cluster := spec.NewCluster()
-  // Preparing the names of nodes for the etcd cluster. The name of the node is also used as it's hostname address
+  // Preparing the names of nodes for the etcd cluster. The name of the node is also used as its hostname address
   etcdHosts := []string{"etcd1", "etcd2", "etcd3"}
 
   for i, host := range etcdHosts {
@@ -436,7 +436,7 @@ func main() {
     etcd := spec.Etcd(
       "etcd", // name of the service, local to the node
       "quay.io/coreos/etcd:v3.6.11", // image of the etcd container
-      // configuration helps setup etcd1 in a way to discover other nodes
+      // configuration helps set up etcd1 in a way to discover other nodes
       spec.EtcdConfig{
         Name:         host,
         RunsOnHost:   etcdHosts[i],
@@ -459,7 +459,7 @@ func main() {
     cluster.AddNode(node)
   }
 
-  // Besides the cluster spec, each tests needs a name that is used to identify test runs later.
+  // Besides the cluster spec, each test needs a name that is used to identify test runs later.
   test := pakostii.NewTest("etcd_stale_read", cluster)
 
   test.Run(context.Background(), func(t *pakostii.TestHandle) error {
@@ -516,7 +516,7 @@ func main() {
     defer isolation.Heal()
 
     t.Logger.Info("waiting for new leader to be elected")
-    // We'll wait 5 seconds to account for leader re-election in the majoriy
+    // We'll wait 5 seconds to account for leader re-election in the majority
     time.Sleep(time.Second * 5)
 
     clientB := clients[1]
@@ -530,7 +530,7 @@ func main() {
     if err != nil {
       return err
     }
-    val := string(getResp.Kvs[0].Value)
+    val := string(resp.Kvs[0].Value)
     if val != "baz" {
       return fmt.Errorf("expected value 'baz', got '%s'", val)
     }

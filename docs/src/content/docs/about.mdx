@@ -3,12 +3,12 @@ title: About
 description: General overview of the pakostii project
 ---
 
-Pakostii (pronounced "pák-ost-ee") is a distributed systems testing framework built with Go, utilizing power of Linux, eBPF, and Containerd.
+Pakostii (pronounced "pák-ost-ee") is a distributed systems testing framework built with Go, utilizing the power of Linux, eBPF, and Containerd.
 
 ## Main Goals
 
 1. Be easy to use but powerful enough to handle complex distributed systems testing scenarios
-2. Allow easy to setup, easy to run, easy to debug environment for distributed systems testing
+2. Provide an easy to set up, easy to run, easy to debug environment for distributed systems testing
 3. Be easy to use in cloud environments like CI/CD pipelines in order to allow developers to streamline their testing workflows
 
 :::caution
@@ -18,7 +18,7 @@ please proceed with caution if you decide to use this project in any sort of hig
 
 ## What you can do with pakostii
 
-While pakostii is at its early stages, it already provides a handful set of features for distributed systems testing.
+While pakostii is at its early stages, it already provides a handful of features for distributed systems testing.
 
 - Simulate a network of nodes with one or multiple services running on each node.
 - Define test cases with fault injection. Currently only network isolation faults are supported, while the end goal is to provide
@@ -27,7 +27,7 @@ a suite of fault types to simulate real-world distributed systems failures, whic
 
 ## What pakostii does for you
 
-pakostii's main goal is to simplify the setup it takes to run distributed systems tests by abstracting
+pakostii's main goal is to simplify the setup required to run distributed systems tests by abstracting
 away network and container provisioning, fault injection, test teardown, while providing a powerful enough API exposed to test cases.
 
 pakostii takes care of:
@@ -38,11 +38,11 @@ pakostii takes care of:
 
 
 ## Limitations & Prerequisites
-Pakostii is at very early stages and does not provided a full suite of fault types to simulate real-world distributed systems failures.
-You can see pakostii is a POC with major reworks needed to make it production-ready.
+Pakostii is at very early stages and does not provide a full suite of fault types to simulate real-world distributed systems failures.
+You can see pakostii is a POC with major rework needed to make it production-ready.
 
 Since pakostii heavily relies on Linux APIs, you can run pakostii tests on Linux hosts only.
-On top of that, there are a list of prerequisites that need to be met before running pakostii tests:
+On top of that, there is a list of prerequisites that need to be met before running pakostii tests:
 
 - Go version is at least 1.26.2
 - Linux Kernel >= 5.9 and BPF/XDP enabled for tests that use network isolation faults.
