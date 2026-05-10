@@ -1,0 +1,29 @@
+---
+title: "Examples"
+description: "A collection of examples demonstrating how to use pakostii"
+---
+
+If you're interested in seeing more examples, you can click on one of the cards and it will take you to the source code.
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <Card title="Stale reads in etcd" icon="database">
+      This example demonstrates how you can get a stale read from etcd using serializable.
+      A simpler version of this test with a walkthrough can be found in [getting started guide](/getting-started).
+
+      Useful resources:
+      - [etcd documentation](https://etcd.io/docs)
+      - [etcd API guarantees](https://etcd.io/docs/v3.5/learning/api_guarantees)
+
+      [Source code](https://github.com/sotnii/pakostii/blob/main/examples/etcd_stale_read)
+  </Card>
+  <Card title="Redis lost writes after isolation" icon="seti:db">
+      This example demonstrates how Redis/Sentinel cluster can drop aknowledged writes after isolation.
+
+      This test is based on awesome [article](https://aphyr.com/posts/283-jepsen-redis) by Jepsen that claims up to 56% of lost writes.
+      However, during tests, it was only possible to reproduce around 30% of lost writes.
+
+      [Source code](https://github.com/sotnii/pakostii/blob/main/examples/redis_lost_writes)
+  </Card>
+</CardGrid>
