@@ -1,7 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
-import starlightThemeRapide from "starlight-theme-rapide";
+import starlightThemeFlexoki from "starlight-theme-flexoki";
 import mermaid from "astro-mermaid";
 
 // https://astro.build/config
@@ -12,7 +12,12 @@ export default defineConfig({
       autoTheme: true,
     }),
     starlight({
-      title: "Pakostii",
+      title: "pakostii",
+      titleDelimiter: "|",
+      favicon: "./src/assets/pkst-logo.svg",
+      logo: {
+        src: "./src/assets/pkst-logo.svg",
+      },
       social: [
         {
           icon: "github",
@@ -20,7 +25,7 @@ export default defineConfig({
           href: "https://github.com/sotnii/pakostii",
         },
       ],
-      plugins: [starlightThemeRapide()],
+      plugins: [starlightThemeFlexoki({ accentColor: "blue" })],
       sidebar: [
         {
           label: "Start here",
