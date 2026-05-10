@@ -6,6 +6,8 @@ import mermaid from "astro-mermaid";
 
 // https://astro.build/config
 export default defineConfig({
+  site: "https://sotnii.github.io",
+  base: "/pakostii",
   integrations: [
     mermaid({
       theme: "forest",
