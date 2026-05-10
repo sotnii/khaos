@@ -16,7 +16,7 @@ export default defineConfig({
     starlight({
       title: "pakostii",
       titleDelimiter: "|",
-      favicon: "./src/assets/pkst-logo.svg",
+      favicon: "/favicon.svg",
       logo: {
         src: "./src/assets/pkst-logo.svg",
       },
