@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containerd/containerd"
-	containerevents "github.com/containerd/containerd/api/events"
-	"github.com/containerd/containerd/cio"
-	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/oci"
+	"github.com/containerd/containerd/api/events"
+	containerd "github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/pkg/cio"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oci"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/typeurl/v2"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -347,7 +347,7 @@ func (m *manager) ObserveEvents(ctx context.Context) (<-chan Event, <-chan error
 					errOut <- err
 					continue
 				}
-				taskExit, ok := payload.(*containerevents.TaskExit)
+				taskExit, ok := payload.(*events.TaskExit)
 				if !ok {
 					continue
 				}
