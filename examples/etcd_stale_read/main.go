@@ -25,9 +25,7 @@ func main() {
 		}
 		etcd := spec.Etcd(
 			"etcd",
-			// This image is based on quay.io/coreos/etcd:v3.3.0, but converted to a
-			// newer image format using skopeo
-			"ghcr.io/sotnii/etcd:3.3.0",
+			"quay.io/coreos/etcd:v3.6.11",
 			spec.EtcdConfig{
 				Name:         host,
 				RunsOnHost:   etcdHosts[i],
@@ -51,10 +49,6 @@ func main() {
 
 	testKey := "name"
 	test.Run(context.Background(), func(t *pakostii.TestHandle) error {
-		// TODO:
-		// 	1. Move leader to etcd1
-		// 	2. Set some value to "old"
-
 		etcdEndpoints := make([]string, 0, len(etcdHosts))
 		for _, host := range etcdHosts {
 			fw, err := t.Network().ForwardPort(host, 2379)
