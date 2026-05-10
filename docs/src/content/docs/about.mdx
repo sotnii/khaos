@@ -31,11 +31,22 @@ pakostii's main goal is to simplify the setup it takes to run distributed system
 away network and container provisioning, fault injection, test teardown, while providing a powerful enough API exposed to test cases.
 
 pakostii takes care of:
-- Network provisioning by defining a custom network namespace for each node and creating a NAT gateway for communication between nodes.
+- Network provisioning by defining a custom network namespace for each node and creating a LAN gateway for communication between nodes.
 - OCI Container provisioning via Containerd.
 - Artifact collection for easy debugging and result analysis.
 - Teardown of resources after test execution, which includes stopping any container tasks and removing configured network topologies.
 
+
+## Limitations & Prerequisites
+Pakostii is at very early stages and does not provided a full suite of fault types to simulate real-world distributed systems failures.
+You can see pakostii is a POC with major reworks needed to make it production-ready.
+
+Since pakostii heavily relies on Linux APIs, you can run pakostii tests on Linux hosts only.
+On top of that, there are a list of prerequisites that need to be met before running pakostii tests:
+
+- Go version is at least 1.26.2
+- Linux Kernel >= 5.9 and BPF/XDP enabled for tests that use network isolation faults.
+- Containerd v2 is installed and running on your system.
 
 ## Sounds interesting?
 
